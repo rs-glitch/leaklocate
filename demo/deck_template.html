@@ -1,0 +1,1331 @@
+<title>LeakLocate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Public+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a flippable report in four decks (Tour, Report, Evidence, Roadmap). Wide screens show one 16:9-ish
+   slide at a time with a bottom navigation bar; narrow screens stack the slides as one scrolling page.
+   Color follows the APWA utility marking code: blue = potable water (sensors), pink = survey marking (the leak);
+   a warm ramp is reserved for the locator's probability. */
+:root {
+  --paper: #f1f5f4; --surface: #fbfdfc; --ink: #13262b; --ink-2: #48605f; --ink-3: #7a8d8c; --rule: #cdd8d6;
+  --water: #0057b8; --leak: #c8175f; --warm: #c8641f;
+  --heat-0: #f3e3d0; --heat-1: #e9a76b; --heat-2: #c8641f; --heat-3: #8a3a0c;
+  --res: #0b4f6c; --pipe: #9fb1b0; --pump: #13262b; --good: #1c7c4a; --bad: #b3261e;
+  --display: "Barlow Semi Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --body: "Public Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0d181a; --surface: #12211f; --ink: #e2ecea; --ink-2: #a3b6b4; --ink-3: #74898a; --rule: #263a3b;
+  --water: #5ea6f2; --leak: #ff5c99; --warm: #e88a45;
+  --heat-0: #3a2a1f; --heat-1: #8f4f22; --heat-2: #e07a2e; --heat-3: #ffb27a;
+  --res: #8fd0ee; --pipe: #3f5658; --pump: #e2ecea; --good: #4cc488; --bad: #ff7b72; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --paper: #0d181a; --surface: #12211f; --ink: #e2ecea; --ink-2: #a3b6b4; --ink-3: #74898a; --rule: #263a3b;
+  --water: #5ea6f2; --leak: #ff5c99; --warm: #e88a45;
+  --heat-0: #3a2a1f; --heat-1: #8f4f22; --heat-2: #e07a2e; --heat-3: #ffb27a;
+  --res: #8fd0ee; --pipe: #3f5658; --pump: #e2ecea; --good: #4cc488; --bad: #ff7b72; color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--paper); color: var(--ink); font: 15px/1.5 var(--body) }
+h1, h2, h3 { font-family: var(--display); line-height: 1.08; text-wrap: balance; margin: 0 }
+h1 { font-size: clamp(2.6rem, 5.4vw, 4.6rem); font-weight: 700 }
+h2 { font-size: clamp(1.7rem, 2.9vw, 2.7rem); font-weight: 600 }
+h3 { font-size: clamp(1.05rem, 1.4vw, 1.3rem); font-weight: 600; letter-spacing: .01em }
+p { margin: 0; max-width: 70ch }
+.eyebrow { font: 500 .74rem/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-2); display: flex; gap: 10px; flex-wrap: wrap; align-items: center }
+.chip { border: 1px solid var(--rule); border-radius: 3px; padding: 4px 7px }
+.chip.blue { border-color: var(--water); color: var(--water) }
+.num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums }
+.lede { font-size: clamp(1rem, 1.3vw, 1.2rem); color: var(--ink-2) }
+.muted { color: var(--ink-2) }
+a { color: var(--water) }
+button, select, input { font: inherit }
+:focus-visible { outline: 2px solid var(--water); outline-offset: 2px }
+
+/* ---------- deck shell ---------- */
+.deck { display: grid }
+.slide { padding-inline: clamp(16px, 4vw, 64px); padding-block: clamp(20px, 3.2vh, 44px); display: grid; gap: clamp(14px, 2.2vh, 26px); align-content: start; min-width: 0 }
+.foot { font: .74rem var(--mono); color: var(--ink-3); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--rule); padding-top: 8px; align-self: end }
+.bar { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; padding: 8px clamp(16px, 4vw, 64px); padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--rule); background: var(--surface) }
+.decks { display: flex; gap: 4px; flex-wrap: wrap }
+.decks button { background: transparent; border: 1px solid transparent; color: var(--ink-2); padding: 6px 10px; border-radius: 4px; cursor: pointer; font-weight: 500 }
+.decks button[aria-current="true"] { border-color: var(--ink); color: var(--ink) }
+.dots { display: flex; gap: 5px; flex: 1; min-width: 80px }
+.dots button { flex: 1; max-width: 36px; height: 6px; border-radius: 3px; border: 0; background: var(--rule); cursor: pointer; padding: 0 }
+.dots button[aria-current="true"] { background: var(--ink) }
+.navbtn { border: 1px solid var(--rule); background: transparent; color: var(--ink); border-radius: 4px; padding: 6px 12px; cursor: pointer; font-weight: 600 }
+.counter { font: .8rem var(--mono); color: var(--ink-2); min-width: 54px; text-align: center }
+.keys { font: .72rem var(--mono); color: var(--ink-3) }
+@media (min-width: 900px) and (min-height: 560px) {
+  html, body { height: 100%; overflow: hidden }
+  .deck { height: 100%; grid-template-rows: minmax(0, 1fr) auto }
+  .stage { position: relative; overflow: hidden }
+  .slide { position: absolute; inset: 0; overflow: auto; opacity: 0; visibility: hidden; transition: opacity .3s ease, visibility .3s }
+  .slide.active { opacity: 1; visibility: visible }
+  .slide.fill { grid-template-rows: auto minmax(0, 1fr) auto }
+}
+@media not ((min-width: 900px) and (min-height: 560px)) {
+  .bar { display: none }
+  .slide { position: relative; border-bottom: 2px solid var(--ink); padding-block: 32px }
+}
+
+/* ---------- statement slide ---------- */
+.slide.ink { background: var(--ink); color: var(--paper) }
+.slide.ink .muted, .slide.ink .foot { color: var(--ink-3) }
+.slide.ink .foot { border-color: var(--ink-2) }
+.statement { font: 600 clamp(2rem, 4.6vw, 4.2rem)/1.08 var(--display); max-width: 22ch; text-wrap: balance }
+.statement em { font-style: normal; color: var(--heat-1) }
+
+/* ---------- tour / instrument ---------- */
+.tourhead { display: flex; justify-content: space-between; align-items: end; gap: 12px 24px; flex-wrap: wrap }
+.instrument { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; min-height: 0 }
+@media (max-width: 1100px) { .instrument { grid-template-columns: minmax(0, 1fr) 260px } }
+@media not ((min-width: 900px) and (min-height: 560px)) { .instrument { grid-template-columns: 1fr } }
+.mapcard { position: relative; background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; min-width: 0 }
+.maptools { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--rule) }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 4px; overflow: hidden }
+.seg button { font: 500 .8rem var(--body); background: transparent; color: var(--ink-2); border: 0; padding: 6px 10px; cursor: pointer }
+.seg button + button { border-left: 1px solid var(--rule) }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper) }
+.mapwrap { position: relative; min-height: 0; display: grid }
+svg#map { width: 100%; height: 100%; max-height: 100%; display: block; touch-action: manipulation }
+@media not ((min-width: 900px) and (min-height: 560px)) { svg#map { height: auto } }
+#map .pipe { stroke: var(--pipe); stroke-width: 1.4; fill: none }
+#map .pump { stroke: var(--pump); stroke-width: 2.4; stroke-dasharray: 3 3 }
+#map .valve { stroke: var(--pump); stroke-width: 2 }
+#map .node { cursor: pointer }
+#map .node circle.base { fill: var(--surface); stroke: var(--ink-3); stroke-width: 1 }
+#map .node:hover circle.base { stroke: var(--ink); stroke-width: 2 }
+#map .tank, #map .res { fill: var(--surface); stroke: var(--ink); stroke-width: 1.6 }
+#map .sensor { fill: var(--water); stroke: var(--surface); stroke-width: 1.5 }
+#map .region { fill: none; stroke: var(--heat-2); stroke-width: 1.5; stroke-dasharray: 2 2 }
+#map .pick { fill: none; stroke: var(--ink); stroke-width: 2 }
+#map .leakmark { stroke: var(--leak); stroke-width: 3; fill: none }
+#map .label { font: 500 11px var(--mono); fill: var(--ink-2) }
+.subs { position: absolute; left: 12px; right: 12px; bottom: 10px; display: flex; justify-content: center; pointer-events: none }
+.subs div { background: var(--ink); color: var(--paper); border-radius: 4px; padding: 8px 12px; max-width: 68ch; font-size: .92rem; line-height: 1.4; box-shadow: 0 2px 10px rgba(0,0,0,.18) }
+.subs b { font-family: var(--mono); font-weight: 500; font-size: .74rem; letter-spacing: .06em; text-transform: uppercase; color: var(--heat-1); margin-right: 8px }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 7px 10px 9px; border-top: 1px solid var(--rule); font-size: .78rem; color: var(--ink-2) }
+.legend span { display: inline-flex; align-items: center; gap: 6px }
+.ramp { width: 60px; height: 8px; border-radius: 2px; background: linear-gradient(90deg, var(--heat-0), var(--heat-1), var(--heat-2), var(--heat-3)) }
+
+.panel { display: grid; gap: 12px; align-content: start; min-width: 0; overflow: auto }
+.control { display: grid; gap: 4px }
+.control label, .control .lbl { font-weight: 600; font-size: .86rem; display: flex; justify-content: space-between; gap: 8px }
+.control output { font-family: var(--mono); font-weight: 500 }
+.hint { font-size: .76rem; color: var(--ink-3) }
+input[type=range] { width: 100%; accent-color: var(--water) }
+select { padding: 5px 8px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink) }
+.btn { font-weight: 600; font-size: .86rem; padding: 7px 11px; border-radius: 4px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); cursor: pointer }
+.btn.ghost { background: transparent; color: var(--ink) }
+.btnrow { display: flex; gap: 8px; flex-wrap: wrap }
+.readout { border-top: 2px solid var(--ink); display: grid }
+.readout .row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--rule); align-items: baseline }
+.readout .row span:first-child { color: var(--ink-2); font-size: .82rem }
+.readout .big { font: 600 1.45rem/1 var(--display) }
+.pill { font: 600 .72rem var(--mono); padding: 2px 6px; border-radius: 3px; letter-spacing: .04em; border: 1px solid currentColor }
+.pill.ok { color: var(--good) } .pill.miss { color: var(--bad) }
+.hl { outline: 3px solid var(--leak); outline-offset: 3px; border-radius: 4px; transition: outline-color .2s }
+
+.player { display: flex; align-items: center; gap: 12px; flex-wrap: wrap }
+.player .btn { min-width: 92px }
+.track { position: relative; flex: 1; min-width: 160px; height: 22px; display: flex; align-items: center; cursor: pointer }
+.track .rail { position: absolute; left: 0; right: 0; height: 4px; border-radius: 2px; background: var(--rule) }
+.track .fill { position: absolute; left: 0; height: 4px; border-radius: 2px; background: var(--leak) }
+.track .tick { position: absolute; width: 2px; height: 12px; background: var(--ink-3); border: 0; padding: 0; transform: translateX(-1px) }
+.clock { font: .8rem var(--mono); color: var(--ink-2) }
+.cursor { position: absolute; left: 0; top: 0; width: 22px; height: 22px; pointer-events: none; z-index: 4; transition: transform .7s cubic-bezier(.4, .1, .2, 1), opacity .3s; opacity: 0 }
+.cursor.on { opacity: 1 }
+.cursor .ripple { position: absolute; left: -9px; top: -9px; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--leak); opacity: 0 }
+.cursor.click .ripple { animation: rip .45s ease-out }
+@keyframes rip { from { opacity: .9; transform: scale(.4) } to { opacity: 0; transform: scale(1.8) } }
+
+/* ---------- report pieces ---------- */
+.ledger { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid var(--ink); border-bottom: 1px solid var(--rule) }
+.ledger > section { padding: 14px 20px 16px 0; display: grid; gap: 8px; align-content: start; min-width: 0 }
+.ledger > section + section { padding-left: 20px; border-left: 1px solid var(--rule) }
+.ledger h3 { font: 500 .76rem var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2) }
+.ledger .adds h3 { color: var(--water) }
+.ledger ul { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; font-size: clamp(.86rem, 1.05vw, .98rem) }
+.ledger .next { color: var(--ink-2); font-size: .86rem; border-top: 1px dashed var(--rule); padding-top: 8px }
+@media (max-width: 760px) { .ledger { grid-template-columns: 1fr } .ledger > section + section { border-left: 0; border-top: 1px solid var(--rule); padding-left: 0 } }
+.kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 2px solid var(--ink) }
+.kpi { padding: 14px 18px 0 0; display: grid; gap: 4px; align-content: start }
+.kpi + .kpi { padding-left: 18px; border-left: 1px solid var(--rule) }
+.kpi b { font: 600 clamp(2rem, 4vw, 3.4rem)/1 var(--display) }
+.kpi span { font-size: .9rem; color: var(--ink-2); max-width: 32ch }
+@media (max-width: 760px) { .kpis { grid-template-columns: 1fr } .kpi + .kpi { border-left: 0; padding-left: 0; border-top: 1px solid var(--rule) } }
+.flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; align-items: stretch }
+.flow .box { border: 1px solid var(--rule); background: var(--surface); padding: 12px; display: grid; gap: 6px; align-content: start; position: relative; min-width: 0 }
+.flow .box + .box { border-left: 0 }
+.flow .box h3 { font-size: 1.02rem }
+.flow .box p, .flow .box li { font-size: .84rem; color: var(--ink-2) }
+.flow .box ul { margin: 0; padding-left: 1em; display: grid; gap: 3px }
+.flow .box .step { font: 500 .7rem var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3) }
+.flow .box.key { border-color: var(--water); box-shadow: inset 0 3px 0 var(--water) }
+.flow .arrow { position: absolute; right: -9px; top: 50%; width: 16px; height: 16px; transform: translateY(-50%) rotate(45deg); border-top: 1px solid var(--rule); border-right: 1px solid var(--rule); background: var(--surface); z-index: 1 }
+@media (max-width: 1000px) { .flow { grid-template-columns: 1fr } .flow .box + .box { border-left: 1px solid var(--rule); border-top: 0 } .flow .arrow { display: none } }
+.two { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 26px; align-items: start }
+@media (max-width: 1000px) { .two { grid-template-columns: 1fr } }
+.chart { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 12px 12px 8px; display: grid; gap: 6px; min-width: 0 }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible }
+.chart text { font: 11px var(--mono); fill: var(--ink-2) }
+.chart .ttl { fill: var(--ink); font-weight: 500 }
+.chart .axis { stroke: var(--rule) } .chart .grid { stroke: var(--rule); stroke-dasharray: 2 3 }
+.cap { font-size: .84rem; color: var(--ink-2) }
+.legendrow { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: .8rem; color: var(--ink-2) }
+.legendrow span { display: inline-flex; gap: 6px; align-items: center }
+.sw { width: 18px; height: 3px; border-radius: 2px; display: inline-block }
+table.lad { border-collapse: collapse; width: 100%; font-size: clamp(.78rem, .95vw, .9rem) }
+table.lad th, table.lad td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--rule); text-align: right; vertical-align: baseline }
+table.lad th { font: 500 .72rem var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2) }
+table.lad td:first-child, table.lad th:first-child, table.lad td:nth-child(2), table.lad th:nth-child(2) { text-align: left }
+table.lad td { font-family: var(--mono); font-variant-numeric: tabular-nums }
+table.lad td.m { font-family: var(--body) }
+table.lad tr.best td { font-weight: 600 }
+.step { font: 500 .72rem var(--mono); border: 1px solid var(--rule); border-radius: 3px; padding: 2px 6px; white-space: nowrap }
+.tablewrap { overflow-x: auto }
+.stats { display: flex; flex-wrap: wrap; gap: 10px 28px }
+.stat { display: grid; gap: 2px } .stat b { font: 600 1.7rem/1 var(--display) } .stat span { font-size: .8rem; color: var(--ink-2); max-width: 26ch }
+.cols3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; border-top: 2px solid var(--ink); padding-top: 14px }
+.cols3 section { display: grid; gap: 8px; align-content: start }
+.cols3 ul { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; font-size: .94rem; color: var(--ink-2) }
+@media (max-width: 900px) { .cols3 { grid-template-columns: 1fr } }
+.trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border-top: 2px solid var(--ink) }
+.mini { display: grid; gap: 6px; padding: 12px 14px 4px 0; align-content: start; min-width: 0 }
+.mini + .mini { padding-left: 14px; border-left: 1px solid var(--rule) }
+.mini.hero h3 { color: var(--water) }
+.mini svg { width: 100%; height: auto; display: block; max-height: 42vh }
+.mini .facts { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: .84rem; color: var(--ink-2) }
+.mini .facts b { font-family: var(--mono); color: var(--ink); font-weight: 500 }
+@media (max-width: 900px) { .trio { grid-template-columns: 1fr } .mini + .mini { border-left: 0; padding-left: 0; border-top: 1px solid var(--rule) } }
+.formula { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; padding: 10px 14px; border: 1px solid var(--water); border-radius: 4px; font-size: .9rem }
+.formula .mono { font-size: 1rem } .formula b { color: var(--water) }
+.chain { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 2px solid var(--ink) }
+.chain .link { padding: 12px 14px 12px 0; display: grid; gap: 5px; align-content: start; min-width: 0 }
+.chain .link + .link { padding-left: 14px; border-left: 1px solid var(--rule) }
+.chain .link.us { background: var(--surface); box-shadow: inset 0 3px 0 var(--water); padding-left: 14px }
+.chain .link p { font-size: .88rem; color: var(--ink-2) } .chain .who { font-size: .78rem; color: var(--ink-3); font-family: var(--mono) }
+.chain .step, .phase .step { font: 500 .7rem var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3) }
+.chain .us .step { color: var(--water) }
+@media (max-width: 900px) { .chain { grid-template-columns: 1fr 1fr } }
+.phases { display: grid; gap: 0; border-left: 2px solid var(--water) }
+.phase { padding: 6px 0 10px 14px; display: grid; gap: 3px } .phase p { font-size: .9rem }
+ul.plain { margin: 0; padding-left: 1.1em; display: grid; gap: 5px; font-size: .92rem }
+.calcgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 14px; align-items: center; font-size: .84rem }
+.calcgrid label { display: flex; justify-content: space-between; gap: 8px; font-weight: 500 } .calcgrid output { font-family: var(--mono) }
+@media (max-width: 700px) { .calcgrid { grid-template-columns: 1fr } }
+.calcout { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; border-top: 1px solid var(--rule); padding-top: 10px }
+.calcout div { display: grid; gap: 2px } .calcout b { font: 600 1.5rem/1 var(--display) } .calcout span { font-size: .78rem; color: var(--ink-2) }
+table.gaps td { text-align: left; vertical-align: top; padding-right: 18px; font-size: .9rem } table.gaps th { text-align: left }
+#decMap { width: 100%; height: auto; max-height: 44vh }
+.planner { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 20px; align-items: start }
+@media (max-width: 1000px) { .planner { grid-template-columns: 1fr } }
+#cityMap { width: 100%; height: auto; max-height: 58vh; display: block }
+#citySeg { flex-wrap: wrap }
+.narr { display: grid; gap: 6px; max-width: 110ch }
+.narr .lead { font-size: clamp(.98rem, 1.2vw, 1.12rem); line-height: 1.45; max-width: 95ch }
+.narr .facts { margin: 0; padding-left: 1.1em; display: grid; gap: 2px; font-size: .86rem; color: var(--ink-2); grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px }
+.narr .facts li { padding-left: 2px } .narr .facts b { color: var(--ink); font-weight: 600 }
+@media (max-width: 900px) { .narr .facts { grid-template-columns: 1fr } }
+.slide.ink .narr .facts { color: var(--ink-3) }
+.qs { margin: 0; padding-left: 1.2em; display: grid; gap: 12px; font-size: clamp(.98rem, 1.25vw, 1.15rem) } .qs b { color: var(--heat-1) }
+.qs span { display: block; font: .74rem var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin-top: 2px }
+.facts-ink { margin: 0; padding-left: 1.1em; display: grid; gap: 4px; font-size: .9rem; color: var(--ink-3) }
+ul.answer { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; font-size: clamp(.95rem, 1.15vw, 1.08rem); max-width: 80ch }
+.ba2 { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface) } .ba2 > div { padding: 10px 12px; display: grid; gap: 6px; min-width: 0 }
+.ba2 > div + div { border-left: 1px solid var(--rule) } .ba2 svg { width: 100%; height: auto; max-height: 28vh } .ba2 h3 { font: 500 .74rem var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2) }
+.ba2 .after h3 { color: var(--water) } .ba2 p { font-size: .86rem; color: var(--ink-2) }
+@media (max-width: 760px) { .ba2 { grid-template-columns: 1fr } .ba2 > div + div { border-left: 0; border-top: 1px solid var(--rule) } }
+.thumbs4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px } .thumbs4 figure { margin: 0; display: grid; gap: 4px; min-width: 0 }
+.thumbs4 svg { width: 100%; height: auto; max-height: 24vh; background: var(--surface); border: 1px solid var(--rule); border-radius: 4px } .thumbs4 figcaption, .cityThumbs figcaption { font: .74rem var(--mono); color: var(--ink-2) }
+.cityThumbs { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px } .cityThumbs figure { margin: 0; display: grid; gap: 4px; min-width: 0 }
+.cityThumbs svg { width: 100%; height: auto; aspect-ratio: 1; background: var(--surface); border: 1px solid var(--rule); border-radius: 4px }
+@media (max-width: 900px) { .thumbs4 { grid-template-columns: 1fr 1fr } .cityThumbs { grid-template-columns: repeat(4, minmax(0, 1fr)) } }
+.kpis { grid-template-columns: repeat(4, minmax(0, 1fr)) } .kpi .klab { font-size: .86rem; color: var(--ink-2) }
+.karrow { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap } .karrow .old { font: 500 1.3rem/1 var(--display); color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px }
+.karrow .arr { font: 600 1.4rem/1 var(--display); color: var(--water) } .karrow .new { font: 700 clamp(1.9rem, 3.2vw, 2.8rem)/1 var(--display); color: var(--ink) }
+.kbar { width: 100%; max-width: 240px; height: auto } .kfoot { font: .72rem var(--mono); color: var(--ink-3) }
+@media (max-width: 1000px) { .kpis { grid-template-columns: 1fr 1fr } }
+.eyebrow .crumb { color: var(--ink); font-weight: 500 } .slide.ink .eyebrow .crumb { color: var(--paper) }
+.narr .pts { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; font-size: clamp(.98rem, 1.2vw, 1.1rem); max-width: 100ch }
+.narr .pts > li::marker { color: var(--water) } .narr .sub { margin: 2px 0 0; padding-left: 1.1em; display: grid; gap: 1px; font-size: .84rem; color: var(--ink-2); list-style: circle }
+.narr .sub b { color: var(--ink); font-weight: 600 }
+.kpihead { font: 500 .78rem var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--water); margin-top: 4px }
+table.qtab { border-collapse: collapse; width: 100%; max-width: 980px; font-size: clamp(.95rem, 1.15vw, 1.08rem) }
+table.qtab th { font: 500 .72rem var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); text-align: left; padding: 6px 10px 6px 0; border-bottom: 2px solid var(--ink) }
+table.qtab td { padding: 8px 10px 8px 0; border-bottom: 1px solid var(--rule) } table.qtab td.q { font-weight: 600 } table.qtab td.old { color: var(--ink-3) }
+table.qtab td.arr { font: 600 1.2rem var(--display); color: var(--accent, var(--water)); width: 1.5em } table.qtab td.new { font-weight: 600 }
+.tip { position: fixed; pointer-events: none; background: var(--ink); color: var(--paper); font: .76rem/1.35 var(--mono); padding: 6px 8px; border-radius: 3px; z-index: 9; max-width: 260px }
+@media (prefers-reduced-motion: reduce) { .slide, .cursor { transition: none !important } .cursor.click .ripple { animation: none } }
+.player { display: none !important }
+</style>
+
+<div class="deck" id="deck">
+<main class="stage" id="stage">
+
+<!-- ================= TOUR ================= -->
+<!-- ================= CITY PLANNER ================= -->
+<section class="slide ink" id="stakes" data-deck="Key gap" data-sub="The problem" aria-label="The problem">
+  <div class="eyebrow" style="color:var(--ink-3)"><span>LeakLocate · the problem</span></div>
+  <h2>Cities lose a quarter of their treated water to leaks, and the small leaks hide inside normal swings in demand</h2>
+  <div class="two" style="grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)">
+    <div style="display:grid;gap:12px;align-content:start">
+      <p class="statement" id="stmt" style="font-size:clamp(1.6rem,3.2vw,2.8rem)"></p>
+      <svg id="flowBar" viewBox="0 0 560 120" role="img" aria-label="A 2 L/s leak compared with total flow and normal demand swings" style="width:100%;height:auto"></svg>
+      <ul class="facts-ink"><li>25–30 % of treated drinking water is lost before it reaches a tap; above 50 % in many cities (World Bank estimates)</li><li>Small, continuous leaks are most of that loss and run for months before anyone sees water on the surface</li></ul>
+    </div>
+    <div style="display:grid;gap:10px;align-content:start">
+      <h3 style="color:var(--paper)">The city’s questions</h3>
+      <ol class="qs">
+        <li><b>Limit water loss:</b> how many pressure sensors should we install, and where? <span>Part 1 · sensor plan</span></li>
+        <li><b>Limit time to fix:</b> when pressures change, which streets should the crew search first? <span>Part 2 · find the leak</span></li>
+        <li><b>Trust:</b> how sure is that search area, and when should we not rely on it? <span>What’s new</span></li>
+      </ol>
+    </div>
+  </div>
+  <div class="foot"><span>Sources: World Bank non-revenue water estimates via Aquatech; flow of EPANET’s Net3 benchmark network from this project’s simulation</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="ledger" data-deck="Key gap" data-sub="What exists, what is missing" aria-label="Prior work and contribution">
+  <h2>What existed, and what this work adds</h2>
+  <table class="qtab"><tr><th>The question</th><th>What existed</th><th></th><th>This work</th></tr><tr><td class="q">Where to put sensors?</td><td class="old">Generic placement methods</td><td class="arr">→</td><td class="new">City-specific plan + count</td></tr><tr><td class="q">Where is the leak?</td><td class="old">Locators, no search area</td><td class="arr">→</td><td class="new">Ranked search area</td></tr><tr><td class="q">How sure is it?</td><td class="old">Not stated</td><td class="arr">→</td><td class="new">Stated and checked: <b id="ldCov"></b></td></tr><tr><td class="q">Where to dig first?</td><td class="old">Most likely spot</td><td class="arr">→</td><td class="new">Shortest expected walk</td></tr></table>
+  <div class="ba2" id="llBA"></div>
+  <div class="foot"><span>Sources: Vrachimis et al. 2022 (BattLeDIM); EPyT-Flow (WaterFutures); WNTR 1.5; EPANET 2.2</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="title" data-deck="Fix" data-sub="The answer" aria-label="Title">
+  <div class="eyebrow"><span>Report</span><span class="chip">Infrastructure health on a shoestring · project 1</span></div>
+  <h1>LeakLocate</h1>
+  <p class="lede" style="max-width:70ch">Answer: plan sensors per city by simulation, then locate leaks with a forest × physics hybrid whose search areas are small and reliable.</p>
+  <ul class="answer">
+    <li><b>Part 1 · sensor plan:</b> every junction of six city networks simulated as a leak; sensors added where they cut the search distance most; a recommended count per city</li>
+    <li><b>Part 2 · find the leak:</b> a random forest fused with a hydraulic physics model points the crew to a small search area</li>
+    <li><b>Reliable:</b> an 80 % search area contains the leak in about 80 % of cases, measured on held-out leaks</li>
+    <li><b>Judged fairly:</b> a benchmark ladder from best-guess baselines upward, 24,000 EPANET simulations</li>
+  </ul>
+  <h3 class="kpihead">Current best → this work</h3>
+  <div class="kpis" id="kpis"></div>
+  <p class="muted" style="font-size:.9rem">All results are simulation on the EPANET Net3 benchmark (92 junctions). Held-out test set: 4,000 leaks from unseen random seeds, 0.5–16 L/s, 6 sensors, 5 % demand noise.</p>
+  <div class="foot"><span>LeakLocate v0.2</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="planner" data-deck="Fix" data-sub="Part 1 · sensor plan" aria-label="Sensor planner by city">
+  <div class="eyebrow"><span>Part 1 · Limit water loss: how many sensors, and where?</span><span class="chip blue">every junction simulated as a leak · 6 city networks</span></div>
+  <h2 id="tPlan">Sensor planner: choose a city network and a sensor count</h2>
+  <div class="planner">
+    <div class="chart" style="min-width:0">
+      <div class="seg" role="group" aria-label="City network" id="citySeg"></div>
+      <svg id="cityMap" role="img" aria-label="City pipe network with optimized sensor locations"></svg>
+      <div class="legendrow"><span><svg width="14" height="14"><path d="M7,1 L13,7 L7,13 L1,7 Z" fill="var(--water)"/></svg>optimized sensor (order of placement)</span><span><svg width="16" height="14"><rect x="1" y="1" width="14" height="12" fill="none" stroke="var(--ink)" stroke-width="1.5"/></svg>tank / reservoir</span></div>
+    </div>
+    <div style="display:grid;gap:12px;align-content:start;min-width:0">
+      <div class="control"><label for="cityK">Sensors <output id="cityKOut"></output></label><input id="cityK" type="range" min="2" max="16" value="6"></div>
+      <div class="readout">
+        <div class="row"><span>Expected error, optimized</span><span class="big num" id="cErr"></span></div>
+        <div class="row"><span>Expected error, random layouts</span><span class="num" id="cRand"></span></div>
+        <div class="row"><span>Random guess (no sensors)</span><span class="num" id="cGuess"></span></div>
+        <div class="row"><span>Recommended count (knee)</span><span class="num" id="cKnee"></span></div>
+      </div>
+      <figure class="chart" style="margin:0"><svg id="cityCurve" viewBox="0 0 420 220" role="img" aria-label="Expected error vs sensor count"></svg>
+        <p class="cap">Expected pipe distance to the leak (physics locator, Monte Carlo over every junction; leak sizes 0.25–2 % of the city’s demand). Knee = first count within 10 % of the best reachable error.</p></figure>
+      <div class="tablewrap"><table class="lad" id="cityTopo"></table></div>
+    </div>
+  </div>
+  <div class="foot"><span>scripts/multicity.py · greedy placement on Monte Carlo expected pipe distance (diagonal noise model after common-mode removal, same for every city)</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="topology" data-deck="Fix" data-sub="Part 1 · sensor plan" aria-label="Topology decides">
+  <div class="eyebrow"><span>Part 1 · How many sensors, and where?</span></div>
+  <h2 id="tTopo"></h2>
+  <div class="two">
+    <figure class="chart" style="margin:0"><h3>Error with 8 optimized sensors as a share of a random guess, vs loops per 100 junctions</h3>
+      <svg id="chTopo" viewBox="0 0 560 330" role="img" aria-label="Error ratio against network loopiness"></svg>
+      <p class="cap">Lower = sensors localize better. Bubble area = number of junctions. Log scale on the horizontal axis.</p></figure>
+    <div style="display:grid;gap:12px;align-content:start">
+      <div class="tablewrap"><table class="lad" id="topoTable"></table></div>
+    </div>
+  </div>
+  <div class="foot"><span>Networks: EPANET/WNTR library and EPyT-Flow benchmark collection</span><span class="pno"></span></div>
+</section>
+
+<section class="slide fill" id="tour" data-deck="Fix" data-sub="Part 2 · find the leak" aria-label="Platform tour">
+  <div class="tourhead">
+    <div style="display:grid;gap:8px">
+      <div class="eyebrow"><span>Part 2 · Limit time to fix: where is the leak?</span><span class="chip blue">platform tour</span><span class="chip">EPANET Net3 · simulation</span></div>
+      <h2>Locating a leak from 6 pressure sensors: platform walkthrough (90 s)</h2>
+    </div>
+    <div class="player" aria-label="Tour player">
+      <button class="btn" id="play">Play tour</button>
+      <div class="track" id="track" role="slider" aria-label="Tour position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><div class="rail"></div><div class="fill" id="fill" style="width:0"></div></div>
+      <span class="clock" id="clock">0:00</span>
+    </div>
+  </div>
+  <div class="instrument" id="instrument">
+    <div class="mapcard">
+      <div class="maptools">
+        <div class="seg" role="group" aria-label="Map layer">
+          <button id="layerInfer" aria-pressed="true">What the locator infers</button>
+          <button id="layerPhys" aria-pressed="false">What the network feels</button>
+        </div>
+        <div class="seg" role="group" aria-label="Clicking a junction">
+          <button id="clickLeak" aria-pressed="true">Click places leak</button>
+          <button id="clickSensor" aria-pressed="false">Click toggles sensor</button>
+        </div>
+      </div>
+      <div class="mapwrap"><svg id="map" role="img" aria-label="Net3 water network with leak, sensors and locator result"></svg>
+        <div class="subs" id="subs"><div><b id="chapNo">Explore</b><span id="chapText">Click any junction to explore the leak search.</span></div></div></div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <aside class="panel" aria-label="Controls and result">
+      <div class="control" id="cModel"><span class="lbl">Locator</span>
+        <div class="seg" role="group" aria-label="Locator model"><button id="mPhys" aria-pressed="false">Physics</button><button id="mForest" aria-pressed="false">Forest</button><button id="mHybrid" aria-pressed="true">Hybrid</button></div>
+        <span class="hint" id="modelHint"></span></div>
+      <div class="control" id="cSize"><label for="size">Leak size <output id="sizeOut"></output></label>
+        <input id="size" type="range" min="0" max="100" value="55"><span class="hint" id="sizeHint"></span></div>
+      <div class="control" id="cK"><label for="k">Pressure sensors <output id="kOut"></output></label>
+        <input id="k" type="range" min="2" max="12" value="6">
+        <select id="placement" aria-label="Sensor placement">
+          <option value="greedy">Optimized placement</option><option value="random">Random placement</option><option value="manual">Manual (click junctions)</option>
+        </select></div>
+      <div class="control" id="cNoise"><label for="noise">Demand noise per junction-hour <output id="noiseOut"></output></label>
+        <input id="noise" type="range" min="0" max="10" value="5" step="1"><span class="hint">Sensors add 0.05 m per hourly reading; readings average 24 h.</span></div>
+      <div class="btnrow"><button class="btn" id="redraw">New reading</button><button class="btn ghost" id="randomLeak">Random leak</button></div>
+      <div class="readout" id="readout" aria-live="polite">
+        <div class="row"><span>Locator in use</span><span class="num" id="rModel"></span></div>
+        <div class="row"><span>Best guess is off by</span><span class="big num" id="rErr"></span></div>
+        <div class="row"><span>Expected error</span><span class="num" id="rExp"></span></div>
+        <div class="row"><span>80 % search region</span><span class="num" id="rReg"></span></div>
+        <div class="row"><span>Leak inside region?</span><span id="rIn"></span></div>
+        <div class="row"><span>Largest drop at a sensor</span><span class="num" id="rDrop"></span></div>
+      </div>
+    </aside>
+  </div>
+  <div class="foot"><span>Physics, a 40-tree forest and their hybrid run in your browser on precomputed EPANET signatures · best guess = smallest expected pipe distance</span><span class="pno"></span></div>
+  <div class="cursor" id="cursor" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 22 22"><path d="M2 2 L2 18 L7 13.5 L10.5 20 L13 19 L9.6 12.6 L16 12.6 Z" fill="var(--ink)" stroke="var(--paper)" stroke-width="1.4"/></svg><span class="ripple"></span></div>
+</section>
+
+<!-- ================= REPORT ================= -->
+
+<section class="slide" id="method" data-deck="Fix" data-sub="How it works" aria-label="Method">
+  <h2>Pipeline: 24,000 EPANET leak simulations → residuals at 6 sensors → a 4-step model ladder → one pick per crew</h2>
+  <div class="flow">
+    <div class="box"><span class="step">Simulate</span><h3>EPANET Net3 via WNTR</h3><ul><li>Pressure-driven demand</li><li>Leak = emitter, Q = C·√p</li><li>Pump schedule fixed as SCADA would report it</li></ul><span class="arrow"></span></div>
+    <div class="box"><span class="step">Scenarios</span><h3>24,000 leaks + 400 noise runs</h3><ul><li>0.5–16 L/s, any junction</li><li>5 % demand noise per junction-hour</li><li>0.05 m sensor noise</li><li>Train and test from different seeds</li></ul><span class="arrow"></span></div>
+    <div class="box"><span class="step">Observe</span><h3>Residuals at 6 sensors</h3><ul><li>24 h mean pressure minus the leak-free model</li><li>Network-wide common mode removed</li></ul><span class="arrow"></span></div>
+    <div class="box"><span class="step">Ladder</span><h3>Baselines → ensembles → physics</h3><ul><li>Step 0: random, constant centre, largest drop</li><li>Step 1: random forest, gradient boosting</li><li>Step 1b: Bayesian signature matcher</li></ul><span class="arrow"></span></div>
+    <div class="box key"><span class="step">Step 2 · decide</span><h3>Smallest expected pipe distance</h3><ul><li>Best guess for the repair crew</li><li>80 % search region</li><li>Greedy sensor placement</li></ul></div>
+  </div>
+  <div class="thumbs4" id="methodThumbs"></div>
+  <p class="muted" style="font-size:.92rem">The live platform composes signature + noise in the browser. That shortcut was checked against full simulations: median error <span class="num" id="supMed"></span> m, about 8 % of the leak signal. All ladder numbers come from full simulations, not the shortcut.</p>
+  <div class="foot"><span>Code: src/leaklocate (sim.py, generate.py, export_demo.py) · scripts/ladder.py</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="diagnosis" data-deck="Fix" data-sub="How it works" aria-label="Diagnosis">
+  <h2 id="tDiag"></h2>
+  <div class="two">
+    <figure class="chart" style="margin:0">
+      <h3 id="tDiagChart"></h3>
+      <div class="legendrow"><span><i class="sw" style="background:var(--warm)"></i>rule-based pump controls</span><span><i class="sw" style="background:var(--water)"></i>SCADA pump schedule given to the model</span></div>
+      <svg id="chDiag" viewBox="0 0 560 250" role="img" aria-label="Hourly residual at one junction before and after the fix"></svg>
+      <p class="cap" id="diagCap"></p>
+    </figure>
+    <div style="display:grid;gap:18px;align-content:start">
+      <div class="stat"><b class="num" id="dg1"></b><span>leak-free runs with a false residual above 10 m, before → after the fix</span></div>
+      <div class="stat"><b class="num" id="dg2"></b><span>median demand-noise residual per junction, raw → network-wide shift removed</span></div>
+      <p class="muted" style="font-size:.95rem">A 1 % swing in total demand moves pressure everywhere at once. A leak moves it most near the leak. Removing the network-wide part keeps the leak’s pattern and drops most of the noise.</p>
+    </div>
+  </div>
+  <div class="foot"><span>scripts/diagnosis_extract.py · same scenario seeds before and after</span><span class="pno"></span></div>
+</section>
+
+<!-- ================= WHAT'S NEW ================= -->
+
+<section class="slide" id="hybrid" data-deck="Fix" data-sub="What’s new" aria-label="The hybrid in one picture">
+  <div class="eyebrow"><span>Novelty 1</span><span class="chip blue">physics-informed calibration</span></div>
+  <h2 id="tHybrid"></h2>
+  <div class="trio" id="trio"></div>
+  <div class="formula"><span class="mono">log p<sub>hybrid</sub> = <b id="fa"></b> · log p<sub>forest</sub> + <b id="fb"></b> · log p<sub>physics</sub></span><span class="muted">weights fitted by maximum likelihood on <span id="valN"></span> validation leaks the forest never saw; then the junction with the smallest expected pipe distance</span></div>
+  <p class="cap" id="trioCap"></p>
+  <p class="cap" id="liveNote"></p>
+  <div class="foot"><span>scripts/hybrid.py · held-out test leak, full EPANET simulation</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="frontier" data-deck="Fix" data-sub="What’s new" aria-label="Median error against coverage">
+  <div class="eyebrow"><span>Novelty 1, measured</span></div>
+  <h2 id="tFront"></h2>
+  <div>
+    <figure class="chart" style="margin:0"><h3>Median error vs. coverage of nominal 80 % regions (bubble area = region size)</h3>
+      <svg id="chFront" viewBox="0 0 560 330" role="img" aria-label="Median error against 80 percent region coverage, bubble size is region size"></svg>
+      <p class="cap">Bubble area = junctions in the 80 % search region. The band marks 78–82 % coverage, a calibrated model lands inside it with about 99.8 % probability on 4,000 test leaks (binomial standard error 0.63 points).</p></figure><div hidden><span id="fr1"></span><span id="fr2"></span><span id="fr2ci"></span><span id="fr3"></span><span id="fr3ci"></span></div></div>
+  <div class="foot"><span>Calibration and fusion fitted on validation leaks only; all numbers on the held-out test set</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="reliab" data-deck="Fix" data-sub="What’s new" aria-label="Reliability">
+  <div class="eyebrow"><span>Novelty 1, checked at every confidence level</span></div>
+  <h2 id="tRel"></h2>
+  <div class="two">
+    <figure class="chart" style="margin:0">
+      <div class="legendrow" id="relLegend"></div>
+      <svg id="chRel" viewBox="0 0 560 330" role="img" aria-label="Stated confidence against observed coverage"></svg>
+      <p class="cap">Stated confidence of the search region against how often it held the leak. On the diagonal = calibrated; below = over-confident (region contains the leak less often than stated).</p></figure>
+  </div>
+  <div class="foot"><span>Levels 50–95 % · same test set</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="decision" data-deck="Fix" data-sub="What’s new" aria-label="Decision rule">
+  <div class="eyebrow"><span>Novelty 2</span><span class="chip blue">decision rule for crews</span></div>
+  <h2 id="tDec"></h2>
+  <div class="two">
+    <figure class="chart" style="margin:0"><h3 id="decTitle">A small leak, live in your browser</h3>
+      <svg id="decMap" role="img" aria-label="Probability map with the most likely junction and the minimum expected distance junction"></svg>
+      <div class="legendrow"><span><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="var(--ink)" stroke-width="2"/></svg>most likely junction</span><span><svg width="16" height="16"><rect x="2" y="2" width="12" height="12" fill="none" stroke="var(--water)" stroke-width="2.5"/></svg>smallest expected distance</span><span><svg width="18" height="18"><circle cx="9" cy="9" r="6" fill="none" stroke="var(--leak)" stroke-width="2.5"/></svg>true leak</span></div>
+      <p class="cap" id="decCap"></p></figure>
+    <figure class="chart" style="margin:0"><h3>Median error, most-likely pick vs. minimum-expected-distance pick (4,000 test leaks)</h3>
+      <svg id="chDec" viewBox="0 0 520 230" role="img" aria-label="Median error with most-likely pick and with minimum expected distance pick"></svg>
+      <p class="cap">Median pipe distance on 4,000 held-out leaks. When the evidence is weak, the rule falls back toward the network’s centre instead of guessing a far corner.</p></figure>
+  </div>
+  <div class="foot"><span>Bayes decision rule for pipe-distance loss</span><span class="pno"></span></div>
+</section>
+
+<!-- ================= EVIDENCE ================= -->
+
+<section class="slide" id="ladder" data-deck="Fix" data-sub="Evidence" aria-label="Benchmark ladder">
+  <h2 id="tLad"></h2>
+  <div class="two">
+    <div class="tablewrap"><table class="lad" id="ladTable"></table></div>
+    <figure class="chart" style="margin:0"><h3>Median pipe-distance error by model, 4,000 held-out leaks</h3>
+      <svg id="chLadder" viewBox="0 0 520 300" role="img" aria-label="Median pipe-distance error by model"></svg>
+      <p class="cap">Distance along pipes from the best guess to the leak. 4,000 held-out leaks.</p></figure>
+  </div>
+  <div class="foot"><span>scripts/ladder.py · train 20,000 / test 4,000 full EPANET runs, unseen seeds</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="bysize" data-deck="Fix" data-sub="Evidence" aria-label="Error by leak size">
+  <h2 id="tSize"></h2>
+  <figure class="chart" style="margin:0;max-width:900px">
+    <div class="legendrow" id="sizeLegend"></div>
+    <svg id="chSize" viewBox="0 0 760 300" role="img" aria-label="Median error by leak size for three models"></svg>
+    <p class="cap">Median pipe distance from the best guess to the leak, by leak size. The decision rule lets both models fall back toward the network centre when the evidence is weak.</p>
+  </figure>
+  <div class="foot"><span>Same held-out test set · bins of leak size at 30 m pressure</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="placement" data-deck="Fix" data-sub="Evidence" aria-label="Sensor placement">
+  <h2 id="tK">Where sensors go matters as much as how many</h2>
+  <figure class="chart" style="margin:0;max-width:900px">
+    <div class="legendrow"><span><i class="sw" style="background:var(--water)"></i>optimized (greedy)</span><span><i class="sw" style="background:var(--ink-3)"></i>random, mean of 5 layouts</span></div>
+    <svg id="chK" viewBox="0 0 760 300" role="img" aria-label="Expected error vs number of sensors"></svg>
+    <p class="cap" id="kCap">Expected pipe distance for 2–8 L/s leaks, physics locator, computed in your browser.</p>
+  </figure>
+  <div class="foot"><span>Greedy placement minimizes expected pipe distance · in-browser Monte Carlo, fixed seed</span><span class="pno"></span></div>
+</section>
+
+<!-- ================= ROADMAP ================= -->
+
+<section class="slide" id="mismatch" data-deck="Fix" data-sub="Evidence" aria-label="Wrong pipe data">
+  <h2 id="tMis"></h2>
+  <div class="two">
+    <div class="tablewrap"><table class="lad" id="misTable"></table></div>
+    <figure class="chart" style="margin:0"><h3>Recalibrated hybrid, one dot per test city</h3>
+      <svg id="chMis" viewBox="0 0 520 300" role="img" aria-label="Coverage of 80 % search areas against the leak-free baseline residual, per city"></svg>
+      <p class="cap">x: largest leak-free residual at a sensor after subtracting the baseline’s common mode, measurable before any leak. y: how often the 80 % area held the leak.</p></figure>
+  </div>
+  <div class="foot"><span>scripts/mismatch.py · 1,000 leaks per city · weights refitted on 5 separate cities (20 % roughness + 20 % demand error)</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="next" data-deck="Fix" data-sub="Limits" aria-label="Limits and next steps">
+  <h2>Limits: one simulated 92-junction network, single leaks, no sensor faults. Next: field calibration</h2>
+  <div class="cityThumbs" id="cityThumbs"></div>
+  <div class="cols3">
+    <section><h3>Limits today</h3><ul>
+      <li>Simulation only, on a 92-junction benchmark.</li><li>Wrong pipe data is handled up to about 20 % error, and only with a leak-free baseline period.</li>
+      <li>One leak at a time; no sensor faults.</li><li>Small leaks (under 2 L/s) stay close to the noise floor.</li></ul></section>
+    <section><h3>Next in this repo</h3><ul>
+      <li>Graph neural network inside the same pooling, judged by this ladder.</li>
+      <li>Sensor dropout, two leaks at once.</li><li>L-Town (782 junctions) via EPyT-Flow.</li></ul></section>
+    <section><h3>With a utility partner</h3><ul>
+      <li>Calibrate the model on SCADA pressure and flow logs.</li><li>Back-test against past repair records.</li>
+      <li>Pilot: 6–10 loggers in one district, compare search time with acoustic crews.</li></ul></section>
+  </div>
+  <p class="muted" style="font-size:.9rem">Part of “Infrastructure health on a shoestring”: LeakLocate (water), CrackGauge (concrete crack width), FaultCost (HVAC faults ranked by cost).</p>
+  <div class="foot"><span>Source repository: release pending</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="company" data-deck="Business value" data-sub="Product position" aria-label="If LeakLocate were a company">
+  <div class="eyebrow"><span>What if this were a company</span></div>
+  <h2>Product: turn a district-level leak alert into a ranked, street-level search area</h2>
+  <div class="chain" id="chain">
+    <div class="link"><span class="step">1 · Detect</span><h3>Is something leaking?</h3><p>Flow balance per district, night-flow analytics.</p><p class="who">Today: utility SCADA, analytics platforms such as TaKaDu</p></div>
+    <div class="link us"><span class="step">2 · Narrow · LeakLocate</span><h3>Which streets?</h3><p>Pressure loggers + the hybrid locator → a ranked search area with calibrated coverage; plus where to put the next logger.</p><p class="who">Gap today: crews sweep whole districts</p></div>
+    <div class="link"><span class="step">3 · Pinpoint</span><h3>Which metre?</h3><p>Acoustic correlators and ground microphones, accurate to about 1 m.</p><p class="who">Today: Gutermann, FIDO, field crews</p></div>
+    <div class="link"><span class="step">4 · Repair</span><h3>Dig and fix</h3><p>Work orders, excavation, verification.</p><p class="who">Today: utility or contractor crews</p></div>
+  </div>
+  <svg id="narrowSvg" viewBox="0 0 900 150" role="img" aria-label="Search length narrowing from district to street to spot" style="width:100%;height:auto"></svg>
+  <div class="cols3" style="border-top-width:1px">
+    <section><h3>Buyer</h3><ul><li>Small and mid-size utilities with district metering, losses above 20 %, and no in-house data team.</li><li>NRW contractors paid on water saved.</li></ul></section>
+    <section><h3>Possible partners</h3><ul><li>Pressure-logger makers (bundle the software with loggers).</li><li>Acoustic service firms (we shrink their search area).</li><li>Engineering consultancies that own utilities’ hydraulic models.</li><li>Development banks funding performance-based NRW contracts.</li></ul></section>
+    <section><h3>Why it could win</h3><ul><li>Uses the hydraulic model and loggers a utility already has.</li><li>Search regions whose stated coverage is measured and holds (81 % for a nominal 80 %).</li><li>Tells the utility where the next logger pays most.</li></ul></section>
+  </div>
+  <div class="foot"><span>Names are illustrative market players, not partners. Sources: TaKaDu, Gutermann, FIDO Tech, ASTERRA public sites</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="build" data-deck="Business value" data-sub="Build-out & revenue" aria-label="Build-out and revenue">
+  <div class="eyebrow"><span>What if this were a company</span><span class="chip">all money figures are illustrative estimates</span></div>
+  <h2>Build-out: three gated phases over 36 months; revenue per district, per verified m³ saved, or per sensor study</h2>
+  <div class="two">
+    <div style="display:grid;gap:14px;align-content:start"><svg id="timeline" viewBox="0 0 520 74" role="img" aria-label="36-month build-out timeline" style="width:100%;height:auto"></svg>
+      <div class="phases">
+        <div class="phase"><span class="step">0–6 months · prove</span><p>1–2 pilot districts with a utility partner; back-test on past repairs; calibrate on SCADA. Gate: crews search measurably less pipe.</p></div>
+        <div class="phase"><span class="step">6–18 months · productize</span><p>Hosted platform; logger bundle with one hardware partner; first paid contracts, priced per district. Gate: 10 paying utilities, renewal.</p></div>
+        <div class="phase"><span class="step">18–36 months · scale</span><p>Performance-based contracts with NRW contractors and development banks; GNN models; more network types. Gate: payback under 12 months for buyers.</p></div>
+      </div>
+      <div><h3 style="margin-bottom:6px">Three ways to charge</h3><ul class="plain"><li><b>Per district per year</b> (software + logger plan).</li><li><b>Share of verified savings</b> in performance-based NRW contracts.</li><li><b>Sensor-plan studies</b> for consultancies, one-off.</li></ul></div>
+    </div>
+    <figure class="chart calc" style="margin:0" aria-label="Value calculator">
+      <h3>What is faster narrowing worth? Change the assumptions</h3>
+      <div class="calcgrid">
+        <label for="calcLeaks">Leaks found per district per year <output id="outLeaks"></output></label><input id="calcLeaks" type="range" min="1" max="20" value="6">
+        <label for="calcSize">Average leak (L/s) <output id="outSize"></output></label><input id="calcSize" type="range" min="0.5" max="8" step="0.5" value="2">
+        <label for="calcDays">Days earlier each leak is repaired <output id="outDays"></output></label><input id="calcDays" type="range" min="5" max="120" step="5" value="30">
+        <label for="calcPrice">Value of lost water ($/m³) <output id="outPrice"></output></label><input id="calcPrice" type="range" min="0.1" max="3" step="0.05" value="0.4">
+        <label for="calcDist">Districts per utility <output id="outDist"></output></label><input id="calcDist" type="range" min="5" max="200" step="5" value="40">
+      </div>
+      <div class="calcout" id="calcOut"></div>
+      <p class="cap">Variable production cost is typically about $0.15–0.55/m³; where supply is scarce, lost water is lost revenue at the tariff, which is several times higher. Assumptions are placeholders until a pilot measures them.</p>
+    </figure>
+  </div>
+  <div class="foot"><span>Sources: World Bank NRW performance-based contracts (68 % more effective than utility-led programmes); market reports put utility leak detection at $3.6–5.3 B in 2025</span><span class="pno"></span></div>
+</section>
+
+<section class="slide" id="gaps" data-deck="Business value" data-sub="Gaps to close" aria-label="Gaps and risks">
+  <div class="eyebrow"><span>What if this were a company</span></div>
+  <h2>Six gaps between the simulation demo and a business; the first is field validation</h2>
+  <div class="two" style="grid-template-columns:minmax(0,1.5fr) minmax(0,1fr)"><div class="tablewrap"><table class="lad gaps">
+    <tr><th>Gap</th><th>Why it matters</th><th>How to close it</th></tr>
+    <tr><td class="m"><b>No field evidence</b></td><td class="m">Every number here is simulation on one benchmark network.</td><td class="m">Pilot with a utility; back-test on its repair history; publish the comparison.</td></tr>
+    <tr><td class="m"><b>Hydraulic models are often stale</b></td><td class="m">Wrong roughness, demands and valve states break model-based localization.</td><td class="m">Robustness tests with model error; auto-calibration on SCADA; the forest term learns some mismatch.</td></tr>
+    <tr><td class="m"><b>Data access</b></td><td class="m">SCADA and GIS data sit behind IT and security reviews.</td><td class="m">Start with portable loggers; on-premise option; SOC 2-style controls later.</td></tr>
+    <tr><td class="m"><b>Slow procurement</b></td><td class="m">Utility buying cycles often run 12–24 months.</td><td class="m">Sell through contractors and logger vendors already approved; performance-based pricing.</td></tr>
+    <tr><td class="m"><b>Incumbents</b></td><td class="m">Analytics, acoustic and satellite players already sell to utilities.</td><td class="m">Position as the narrowing step that makes their crews and sensors more productive; partner, do not replace.</td></tr>
+    <tr><td class="m"><b>Small leaks</b></td><td class="m">Below about 2 L/s the signal sits in demand noise.</td><td class="m">Combine with night-flow analysis and acoustic sensing; be explicit about the detection floor.</td></tr>
+  </table></div><figure class="chart" style="margin:0"><svg id="riskSvg" viewBox="0 0 360 300" role="img" aria-label="Gaps placed by likelihood and impact (judgement)"></svg><p class="cap">Placement is judgement, not measured.</p></figure></div>
+  <div class="foot"><span>Procurement duration is an industry rule of thumb, not measured here</span><span class="pno"></span></div>
+</section>
+
+</main>
+<nav class="bar" aria-label="Deck navigation">
+  <div class="decks" id="decks"></div>
+  <div class="dots" id="dots"></div>
+  <button class="navbtn" id="prev" aria-label="Previous slide">←</button>
+  <span class="counter" id="counter"></span>
+  <button class="navbtn" id="next" aria-label="Next slide">→</button>
+  <span class="keys">← → keys</span>
+</nav>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+const N = D.nodes.length, SIG = D.signature, NOISE = D.noise, DIST = D.dist_m, SZ = D.sizes_lps, NREF = D.demand_sigma;
+const SENSOR_VAR = 0.0025 / D.hours, NCOV = Math.floor(NOISE.length * 0.75);
+const GRID = Array.from({length: 11}, (_, i) => Math.exp(Math.log(SZ[0]) + i * (Math.log(SZ[SZ.length - 1]) - Math.log(SZ[0])) / 10));
+const $ = (id) => document.getElementById(id);
+const fmtM = (m) => m >= 1000 ? (m / 1000).toFixed(m >= 10000 ? 0 : 1) + " km" : Math.round(m) + " m";
+const wide = () => matchMedia("(min-width: 900px) and (min-height: 560px)").matches;
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+function makeRng(s) { let x = s >>> 0 || 1; return () => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return ((x >>> 0) % 1e9) / 1e9; }; }
+let rnd = makeRng(12345);
+const gauss = (r) => Math.sqrt(-2 * Math.log(r() + 1e-12)) * Math.cos(2 * Math.PI * r());
+
+// ---------------- physics + locator ----------------
+function signatureAt(leak, q) {
+  const lq = Math.log(q); let j = 0;
+  while (j < SZ.length - 2 && Math.log(SZ[j + 1]) < lq) j++;
+  const t = Math.min(1, Math.max(0, (lq - Math.log(SZ[j])) / (Math.log(SZ[j + 1]) - Math.log(SZ[j]))));
+  const a = SIG[leak][j], b = SIG[leak][j + 1]; return a.map((v, i) => v + t * (b[i] - v));
+}
+function observe(leak, q, ns, sampleIdx, r) { const s = signatureAt(leak, q), n = NOISE[sampleIdx]; return s.map((v, i) => v + ns * n[i] + Math.sqrt(SENSOR_VAR) * gauss(r)); }
+const cache = new Map();
+function model(sensors, ns) {
+  const key = sensors.join(",") + "|" + ns; if (cache.has(key)) return cache.get(key);
+  const k = sensors.length, C = Array.from({length: k}, () => new Float64Array(k)), mean = new Float64Array(k), rows = [];
+  for (let s = 0; s < NCOV; s++) { const v = sensors.map((i) => ns * NOISE[s][i]); const m = v.reduce((a, b) => a + b, 0) / k; const c = v.map((x) => x - m); rows.push(c); c.forEach((x, i) => mean[i] += x / NCOV); }
+  for (const c of rows) for (let i = 0; i < k; i++) for (let j = 0; j <= i; j++) C[i][j] += (c[i] - mean[i]) * (c[j] - mean[j]) / (NCOV - 1);
+  for (let i = 0; i < k; i++) { C[i][i] += SENSOR_VAR + 1e-6; for (let j = 0; j < i; j++) C[j][i] = C[i][j]; }
+  const L = Array.from({length: k}, () => new Float64Array(k));
+  for (let i = 0; i < k; i++) for (let j = 0; j <= i; j++) { let s = C[i][j]; for (let p = 0; p < j; p++) s -= L[i][p] * L[j][p]; L[i][j] = i === j ? Math.sqrt(Math.max(s, 1e-12)) : s / L[j][j]; }
+  const whiten = (v) => { const o = new Float64Array(k); for (let i = 0; i < k; i++) { let s = v[i]; for (let p = 0; p < i; p++) s -= L[i][p] * o[p]; o[i] = s / L[i][i]; } return o; };
+  const center = (v) => { const m = v.reduce((a, b) => a + b, 0) / v.length; return v.map((x) => x - m); };
+  const templ = []; for (let c = 0; c < N; c++) templ.push(GRID.map((q) => { const f = signatureAt(c, q); return whiten(center(sensors.map((i) => f[i]))); }));
+  const M = {whiten, center, templ}; cache.set(key, M); if (cache.size > 48) cache.delete(cache.keys().next().value); return M;
+}
+function locate(field, sensors, ns) {
+  const M = model(sensors, ns), y = M.whiten(M.center(sensors.map((i) => field[i]))), G = GRID.length;
+  const ll = new Float64Array(N * G); let mx = -Infinity;
+  for (let c = 0; c < N; c++) for (let g = 0; g < G; g++) { const t = M.templ[c][g]; let s = 0; for (let i = 0; i < y.length; i++) { const d = y[i] - t[i]; s += d * d; } ll[c * G + g] = -0.5 * s; if (-0.5 * s > mx) mx = -0.5 * s; }
+  const p = new Float64Array(N); let z = 0;
+  for (let c = 0; c < N; c++) { let s = 0; for (let g = 0; g < G; g++) s += Math.exp(ll[c * G + g] - mx); p[c] = s; z += s; }
+  for (let c = 0; c < N; c++) p[c] /= z; return p;
+}
+function summarize(p, leak) {
+  // Step 2 decision rule: the junction with the smallest expected pipe distance (falls back to the centre when p is flat)
+  let best = 0, bestE = Infinity;
+  for (let c = 0; c < N; c++) { let e = 0; for (let j = 0; j < N; j++) if (p[j] > 1e-6) e += p[j] * DIST[j][c]; if (e < bestE) { bestE = e; best = c; } }
+  const order = Array.from(p.keys()).sort((a, b) => p[b] - p[a]); const region = []; let acc = 0;
+  for (const c of order) { region.push(c); acc += p[c]; if (acc >= 0.8) break; }
+  let exp = 0; for (let c = 0; c < N; c++) exp += p[c] * DIST[leak][c];
+  return {best, err: DIST[leak][best], exp, region, inRegion: region.includes(leak)};
+}
+const greedyIdx = D.greedy_order.map((n) => D.nodes.indexOf(n));
+function randomLayout(k, s) { const r = makeRng(s), idx = Array.from({length: N}, (_, i) => i); for (let i = N - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [idx[i], idx[j]] = [idx[j], idx[i]]; } return idx.slice(0, k).sort((a, b) => a - b); }
+
+// ---------------- in-browser forest + hybrid ----------------
+const FO = D.forest, fSens = FO.sensors.map((n) => D.nodes.indexOf(n));
+function forestProba(field) {
+  const m = fSens.map((i) => field[i]), mu = m.reduce((a, b) => a + b, 0) / m.length, x = m.map((v) => v - mu).concat([mu]);
+  const p = new Float64Array(N);
+  for (const t of FO.tree_data) { let n = 0; while (t.l[n] !== -1) n = Math.fround(x[t.f[n]]) <= t.t[n] ? t.l[n] : t.r[n]; for (let j = t.off[n]; j < t.off[n + 1]; j++) p[t.cls[j]] += t.p[j]; }
+  for (let c = 0; c < N; c++) p[c] /= FO.tree_data.length; return p;
+}
+function forestFromX(x) { const p = new Float64Array(N); for (const t of FO.tree_data) { let n = 0; while (t.l[n] !== -1) n = Math.fround(x[t.f[n]]) <= t.t[n] ? t.l[n] : t.r[n]; for (let j = t.off[n]; j < t.off[n + 1]; j++) p[t.cls[j]] += t.p[j]; } for (let c = 0; c < N; c++) p[c] /= FO.tree_data.length; return p; }
+const sameAsForest = (s) => s.length === fSens.length && s.every((v, i) => v === fSens[i]);
+function modelInUse(s) { return st.model === "physics" || !sameAsForest(s) ? "physics" : st.model; }
+function locateSel(field, s, ns) {
+  const used = modelInUse(s), pp = locate(field, s, ns); if (used === "physics") return pp;
+  const pf = forestProba(field); if (used === "forest") return pf;
+  const out = new Float64Array(N); let mx = -Infinity;
+  for (let c = 0; c < N; c++) { out[c] = FO.ab[0] * Math.log(pf[c] + 1e-6) + FO.ab[1] * Math.log(pp[c] + 1e-6); if (out[c] > mx) mx = out[c]; }
+  let z = 0; for (let c = 0; c < N; c++) { out[c] = Math.exp(out[c] - mx); z += out[c]; } for (let c = 0; c < N; c++) out[c] /= z; return out;
+}
+
+// ---------------- instrument state ----------------
+const DEFAULT = {sizeT: 55, k: 6, placement: "greedy", noisePct: 5, layer: "infer", click: "leak", model: "hybrid"};
+const st = {leak: 0, manual: [], sample: NCOV, field: null, post: null, ...DEFAULT};
+const sizeFromT = (t) => Math.exp(Math.log(0.5) + (t / 100) * (Math.log(16) - Math.log(0.5)));
+function sensors() { if (st.placement === "greedy") return greedyIdx.slice(0, st.k).sort((a, b) => a - b); if (st.placement === "random") return randomLayout(st.k, 777); return st.manual.slice().sort((a, b) => a - b); }
+
+// ---------------- map ----------------
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const allXY = D.xy.concat(D.other_nodes.map((o) => o.xy)), xs = allXY.map((p) => p[0]), ys = allXY.map((p) => p[1]);
+const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+const W = 760, PAD = 24, H = Math.round((W - 2 * PAD) * (maxY - minY) / (maxX - minX) + 2 * PAD);
+const sx = (x) => PAD + (x - minX) / (maxX - minX) * (W - 2 * PAD), sy = (y) => H - PAD - (y - minY) / (maxY - minY) * (H - 2 * PAD);
+const posOf = {}; D.nodes.forEach((n, i) => posOf[n] = [sx(D.xy[i][0]), sy(D.xy[i][1])]); D.other_nodes.forEach((o) => posOf[o.name] = [sx(o.xy[0]), sy(o.xy[1])]);
+const map = $("map"); map.setAttribute("viewBox", `0 0 ${W} ${H}`);
+const gLinks = el("g", {}, map), gHalo = el("g", {}, map), gNodes = el("g", {}, map), gTop = el("g", {}, map);
+for (const l of D.links) { const a = posOf[l.a], b = posOf[l.b]; if (a && b) el("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: l.type === "Pump" ? "pump" : l.type === "Valve" ? "valve" : "pipe"}, gLinks); }
+for (const o of D.other_nodes) { const [x, y] = posOf[o.name];
+  if (o.type === "Tank") el("rect", {x: x - 7, y: y - 6, width: 14, height: 12, class: "tank"}, gTop);
+  else el("path", {d: `M${x - 8},${y - 6} L${x + 8},${y - 6} L${x + 5},${y + 6} L${x - 5},${y + 6} Z`, class: "res"}, gTop); }
+const nodeG = [], nodeEls = D.nodes.map((n, i) => { const g = el("g", {class: "node"}, gNodes); const [x, y] = posOf[n];
+  el("circle", {cx: x, cy: y, r: 10, fill: "transparent"}, g); const c = el("circle", {cx: x, cy: y, r: 3.2, class: "base"}, g);
+  g.addEventListener("click", (e) => { if (e.isTrusted) userTookOver(); onNodeClick(i); }); g.addEventListener("mousemove", (e) => showTip(e, nodeTip(i))); g.addEventListener("mouseleave", hideTip); nodeG.push(g); return c; });
+const cssv = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const heat = (t) => cssv(["--heat-0", "--heat-1", "--heat-2", "--heat-3"][Math.min(3, Math.floor(t * 3.999))]);
+
+function drawMap() {
+  gHalo.replaceChildren(); const sens = sensors(), sset = new Set(sens), R = summarize(st.post, st.leak);
+  if (st.layer === "infer") {
+    const pmax = Math.max(...st.post);
+    D.nodes.forEach((n, i) => { const p = st.post[i]; if (p < 0.002) return; const [x, y] = posOf[n]; el("circle", {cx: x, cy: y, r: 4 + 22 * Math.sqrt(p / pmax), fill: heat(p / pmax), "fill-opacity": 0.8}, gHalo); });
+    for (const c of R.region) { const [x, y] = posOf[D.nodes[c]]; el("circle", {cx: x, cy: y, r: 7.5, class: "region"}, gHalo); }
+    const [bx, by] = posOf[D.nodes[R.best]]; el("rect", {x: bx - 9, y: by - 9, width: 18, height: 18, class: "pick"}, gHalo);
+    const bt = el("text", {x: bx + 12, y: by + 16, class: "label"}, gHalo); bt.textContent = "best guess";
+  } else {
+    const cm = st.field.reduce((a, b) => a + b, 0) / N, dev = st.field.map((v) => v - cm), mx = Math.max(...dev.map(Math.abs), 1e-6);
+    D.nodes.forEach((n, i) => { const t = Math.abs(dev[i]) / mx; if (dev[i] >= 0 || t < 0.04) return; const [x, y] = posOf[n]; el("circle", {cx: x, cy: y, r: 3 + 16 * Math.sqrt(t), fill: cssv("--res"), "fill-opacity": 0.25 + 0.6 * t}, gHalo); });
+  }
+  nodeEls.forEach((c, i) => c.setAttribute("r", sset.has(i) ? 0 : 3.2));
+  for (const s of sens) { const [x, y] = posOf[D.nodes[s]]; el("path", {d: `M${x},${y - 7} L${x + 7},${y} L${x},${y + 7} L${x - 7},${y} Z`, class: "sensor"}, gHalo); }
+  const [lx, ly] = posOf[D.nodes[st.leak]];
+  el("circle", {cx: lx, cy: ly, r: 11, class: "leakmark"}, gHalo);
+  el("path", {d: `M${lx - 16},${ly} H${lx - 6} M${lx + 6},${ly} H${lx + 16} M${lx},${ly - 16} V${ly - 6} M${lx},${ly + 6} V${ly + 16}`, class: "leakmark"}, gHalo);
+  const t = el("text", {x: lx + 14, y: ly - 12, class: "label"}, gHalo); t.textContent = "leak";
+}
+function legend() {
+  const inf = st.layer === "infer";
+  $("legend").innerHTML = `<span><svg width="14" height="14"><path d="M7,1 L13,7 L7,13 L1,7 Z" fill="var(--water)"/></svg>Sensor</span>` +
+    `<span><svg width="18" height="18"><circle cx="9" cy="9" r="6" fill="none" stroke="var(--leak)" stroke-width="2.5"/></svg>True leak</span>` +
+    (inf ? `<span><i class="ramp"></i>Probability</span><span><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="var(--heat-2)" stroke-dasharray="2 2" stroke-width="1.5"/></svg>80 % region</span><span><svg width="16" height="16"><rect x="2" y="2" width="12" height="12" fill="none" stroke="var(--ink)" stroke-width="2"/></svg>Best guess</span>`
+         : `<span><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="var(--res)" fill-opacity=".6"/></svg>Pressure drop vs network average</span>`) +
+    `<span><svg width="16" height="14"><rect x="1" y="1" width="14" height="12" fill="none" stroke="var(--ink)" stroke-width="1.5"/></svg>Tank</span>` +
+    `<span><svg width="18" height="14"><path d="M1,1 L17,1 L14,13 L4,13 Z" fill="none" stroke="var(--ink)" stroke-width="1.5"/></svg>Reservoir</span>` +
+    `<span><svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke="var(--pump)" stroke-width="2.4" stroke-dasharray="3 3"/></svg>Pump</span>`;
+}
+const tip = $("tip");
+function nodeTip(i) { const s = new Set(sensors()); return `Junction ${D.nodes[i]}${s.has(i) ? " · sensor" : ""}<br>probability ${(100 * st.post[i]).toFixed(1)} %<br>pipe distance to leak ${fmtM(DIST[st.leak][i])}`; }
+function showTip(e, html) { tip.innerHTML = html; tip.hidden = false; tip.style.left = Math.min(e.clientX + 14, innerWidth - 270) + "px"; tip.style.top = (e.clientY + 14) + "px"; }
+function hideTip() { tip.hidden = true; }
+
+function compute(newSample) {
+  if (newSample) st.sample = NCOV + Math.floor(rnd() * (NOISE.length - NCOV));
+  const ns = st.noisePct / (100 * NREF); st.field = observe(st.leak, sizeFromT(st.sizeT), ns, st.sample, rnd);
+  const s = sensors(); st.post = s.length < 2 ? new Float64Array(N).fill(1 / N) : locateSel(st.field, s, ns);
+}
+function render() {
+  const q = sizeFromT(st.sizeT), s = sensors(), R = summarize(st.post, st.leak);
+  $("size").value = st.sizeT; $("k").value = st.k; $("noise").value = st.noisePct; $("placement").value = st.placement;
+  $("layerInfer").setAttribute("aria-pressed", st.layer === "infer"); $("layerPhys").setAttribute("aria-pressed", st.layer !== "infer");
+  $("clickLeak").setAttribute("aria-pressed", st.click === "leak"); $("clickSensor").setAttribute("aria-pressed", st.click !== "leak");
+  ["mPhys", "mForest", "mHybrid"].forEach((id) => $(id).setAttribute("aria-pressed", ({mPhys: "physics", mForest: "forest", mHybrid: "hybrid"})[id] === st.model));
+  const used = modelInUse(s); $("rModel").textContent = used;
+  $("modelHint").textContent = st.model !== "physics" && used === "physics" ? "Forest and hybrid are trained for the 6-sensor optimized layout; showing physics." : st.model !== "physics" && st.noisePct !== 5 ? "Forest trained at 5 % demand noise; other levels test robustness." : used === "hybrid" ? `log p = ${FO.ab[0]} · log p(forest) + ${FO.ab[1]} · log p(physics)` : "";
+  $("sizeOut").textContent = q.toFixed(q < 2 ? 1 : 0) + " L/s";
+  $("sizeHint").textContent = `${(100 * q / D.system_demand_lps).toFixed(2)} % of network flow · ${(q * 86.4).toFixed(0)} m³/day`;
+  $("kOut").textContent = st.placement === "manual" ? s.length + " (manual)" : st.k; $("noiseOut").textContent = st.noisePct + " %";
+  $("rErr").textContent = s.length < 2 ? "—" : fmtM(R.err); $("rExp").textContent = s.length < 2 ? "needs 2+ sensors" : fmtM(R.exp);
+  $("rReg").textContent = R.region.length + " of " + N + " junctions";
+  $("rIn").innerHTML = R.inRegion ? `<span class="pill ok">YES</span>` : `<span class="pill miss">NO</span>`;
+  const cm = st.field.reduce((a, b) => a + b, 0) / N; const drop = s.length ? Math.min(...s.map((i) => st.field[i] - cm)) : 0;
+  $("rDrop").textContent = s.length ? Math.max(0, -drop * 100).toFixed(1) + " cm" : "—";
+  drawMap(); legend();
+}
+function update(newSample) { compute(newSample); render(); }
+function onNodeClick(i) {
+  if (st.click === "leak") st.leak = i;
+  else { if (st.placement !== "manual") { st.manual = sensors(); st.placement = "manual"; } const j = st.manual.indexOf(i); if (j >= 0) st.manual.splice(j, 1); else st.manual.push(i); }
+  update(true);
+}
+function bindUser(id, ev, fn) { $(id).addEventListener(ev, (e) => { if (e.isTrusted) userTookOver(); fn(e); }); }
+bindUser("layerInfer", "click", () => { st.layer = "infer"; render(); });
+bindUser("layerPhys", "click", () => { st.layer = "phys"; render(); });
+bindUser("clickLeak", "click", () => { st.click = "leak"; render(); });
+bindUser("clickSensor", "click", () => { st.click = "sensor"; render(); });
+bindUser("size", "input", (e) => { st.sizeT = +e.target.value; update(false); });
+bindUser("k", "input", (e) => { st.k = +e.target.value; if (st.placement === "manual") st.placement = "greedy"; update(false); });
+bindUser("placement", "change", (e) => { st.placement = e.target.value; if (st.placement === "manual" && !st.manual.length) st.manual = greedyIdx.slice(0, st.k); update(false); });
+bindUser("noise", "input", (e) => { st.noisePct = +e.target.value; update(false); });
+bindUser("mPhys", "click", () => { st.model = "physics"; update(false); });
+bindUser("mForest", "click", () => { st.model = "forest"; update(false); });
+bindUser("mHybrid", "click", () => { st.model = "hybrid"; update(false); });
+bindUser("redraw", "click", () => update(true));
+bindUser("randomLeak", "click", () => { st.leak = Math.floor(rnd() * N); update(true); });
+
+// ---------------- tour (the "video") ----------------
+const tourSlide = $("tour"), cursor = $("cursor");
+const CANCEL = Symbol("cancel");
+const tour = {run: 0, playing: false, ch: 0, chStart: 0, done: false};
+function tourLeak() { // a clear, visible case for the walkthrough (typical accuracy is on the Evidence slides)
+  const sens = new Set(greedyIdx.slice(0, 6)); let best = 0, bestE = Infinity; const ns = 0;
+  for (let c = 0; c < N; c++) { if (sens.has(c)) continue; const f = signatureAt(c, 6); const p = locate(f, greedyIdx.slice(0, 6).sort((a, b) => a - b), 1); const e = summarize(p, c).exp; if (e < bestE) { bestE = e; best = c; } }
+  return best;
+}
+let TOUR_LEAK = 0, TOUR_START_LEAK = 0;
+function nearNonSensors(c, n) { const s = new Set(sensors()); return Array.from({length: N}, (_, i) => i).filter((i) => i !== c && !s.has(i)).sort((a, b) => DIST[c][a] - DIST[c][b]).slice(0, n); }
+function resetInstrument() { Object.assign(st, DEFAULT, {leak: TOUR_START_LEAK, manual: [], sample: NCOV}); rnd = makeRng(12345); clearHL(); update(false); }
+const sleep = (ms, run) => new Promise((res, rej) => setTimeout(() => (run !== tour.run ? rej(CANCEL) : res()), ms));
+function clearHL() { tourSlide.querySelectorAll(".hl").forEach((e) => e.classList.remove("hl")); }
+function hl(elm) { clearHL(); if (elm) elm.classList.add("hl"); }
+function pointAt(elm, fx = 0.5, fy = 0.5) { const r = elm.getBoundingClientRect(), b = tourSlide.getBoundingClientRect(); return [r.left - b.left + r.width * fx + tourSlide.scrollLeft, r.top - b.top + r.height * fy + tourSlide.scrollTop]; }
+async function moveTo(elm, run, fx, fy) { const [x, y] = pointAt(elm, fx, fy); cursor.classList.add("on"); cursor.style.transform = `translate(${x - 3}px, ${y - 2}px)`; await sleep(reduced ? 50 : 760, run); }
+async function tap(run) { cursor.classList.remove("click"); void cursor.offsetWidth; cursor.classList.add("click"); await sleep(260, run); }
+async function slideTo(input, key, to, ms, run) { const from = st[key], steps = Math.max(1, Math.round(ms / 60)); for (let i = 1; i <= steps; i++) { st[key] = Math.round(from + (to - from) * i / steps); if (key === "k" && st.placement === "manual") st.placement = "greedy"; update(false); await sleep(ms / steps, run); } }
+const STEPS = [
+  {title: "Question", dur: 6, text: "A utility’s question: where is the leak, and how many pressure sensors does it take to find it?",
+    fast() {}, async play(r) { await sleep(400, r); hl(null); }},
+  {title: "Network", dur: 7, text: "This is EPANET’s Net3 benchmark: 92 junctions, tanks, reservoirs and pumps. Every pressure on this page comes from hydraulic simulation.",
+    fast() {}, async play(r) { await moveTo(map, r, 0.3, 0.35); await moveTo(map, r, 0.7, 0.65); }},
+  {title: "Place a leak", dur: 6, text: "Click any junction to start a leak there. The pink crosshair marks the true leak.",
+    fast() { st.leak = TOUR_LEAK; update(true); }, async play(r) { await moveTo(nodeG[TOUR_LEAK], r); await tap(r); st.leak = TOUR_LEAK; update(true); }},
+  {title: "Leak size", dur: 8, text: "Drag the leak size. Even 8 L/s, about 700 m³ a day, is barely 1 % of this network’s flow.",
+    fast() { st.sizeT = 80; update(false); }, async play(r) { hl($("cSize")); await moveTo($("size"), r, 0.55); await slideTo($("size"), "sizeT", 20, 900, r); await slideTo($("size"), "sizeT", 80, 1600, r); }},
+  {title: "What the network feels", dur: 7, text: "This layer shows each junction’s pressure drop after removing the network-wide shift caused by normal demand swings.",
+    fast() { st.layer = "phys"; render(); }, async play(r) { hl(null); await moveTo($("layerPhys"), r); await tap(r); st.layer = "phys"; render(); }},
+  {title: "What the locator infers", dur: 8, text: "The locator compares sensor readings with the simulated signature of a leak at every junction. Warm circles = probability, dashed rings = the 80 % search region, square = best guess.",
+    fast() { st.layer = "infer"; render(); }, async play(r) { await moveTo($("layerInfer"), r); await tap(r); st.layer = "infer"; render(); }},
+  {title: "Physics, forest, hybrid", dur: 10, text: "Switch the locator. Physics: large 80 % regions (37 junctions on average) that contain the leak 86 % of the time. Forest: small regions (21) that contain it only 68 % of the time. Hybrid: 29 junctions, 81 %.",
+    fast() { st.model = "hybrid"; update(false); }, async play(r) { hl($("cModel")); for (const [id, m] of [["mPhys", "physics"], ["mForest", "forest"], ["mHybrid", "hybrid"]]) { await moveTo($(id), r); await tap(r); st.model = m; update(false); await sleep(1700, r); } }},
+  {title: "More sensors", dur: 8, text: "Add sensors and the search region shrinks (other layouts use the physics locator; the forest is trained for the 6-sensor optimized layout).",
+    fast() { st.k = 10; update(false); }, async play(r) { hl($("cK")); await moveTo($("k"), r, 0.3); await slideTo($("k"), "k", 2, 700, r); await sleep(500, r); await slideTo($("k"), "k", 10, 1800, r); }},
+  {title: "Placement", dur: 8, text: "Where sensors go matters. Random placement versus the optimized layout, same number of sensors.",
+    fast() { st.placement = "greedy"; update(false); }, async play(r) { await moveTo($("placement"), r); await tap(r); st.placement = "random"; update(false); await sleep(2200, r); st.placement = "greedy"; update(false); }},
+  {title: "Your own sensors", dur: 8, text: "Or place sensors yourself: switch the click mode and tap junctions on the map.",
+    fast() { st.click = "sensor"; const n = nearNonSensors(TOUR_LEAK, 2); st.manual = sensors().concat(n); st.placement = "manual"; update(true); },
+    async play(r) { await moveTo($("clickSensor"), r); await tap(r); st.click = "sensor"; render(); for (const n of nearNonSensors(TOUR_LEAK, 2)) { await moveTo(nodeG[n], r); await tap(r); onNodeClick(n); } }},
+  {title: "Noise and new readings", dur: 8, text: "Raise demand noise and take new readings. The answer is a probability, and it moves with the data.",
+    fast() { st.noisePct = 8; st.click = "leak"; update(true); }, async play(r) { hl($("cNoise")); await moveTo($("noise"), r, 0.5); await slideTo($("noise"), "noisePct", 8, 900, r); await moveTo($("redraw"), r); for (let i = 0; i < 3; i++) { await tap(r); update(true); await sleep(650, r); } st.click = "leak"; render(); }},
+  {title: "Readout", dur: 7, text: "The readout reports the best guess’s error in metres of pipe, the 80 % search region, and whether it holds the true leak.",
+    fast() {}, async play(r) { hl($("readout")); await moveTo($("readout"), r, 0.5, 0.3); }},
+  {title: "Next", dur: 6, text: "Next: what existed, what is new (the forest × physics hybrid), the benchmark on 4,000 held-out leaks, and how this could become a company. Use → or the tabs below.",
+    fast() { resetInstrument(); }, async play(r) { hl(null); cursor.classList.remove("on"); await sleep(1800, r); resetInstrument(); }},
+];
+const starts = []; let total = 0; for (const s of STEPS) { starts.push(total); total += s.dur; }
+const fmtT = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+const track = $("track");
+STEPS.forEach((s, i) => { const b = document.createElement("button"); b.className = "tick"; b.style.left = (100 * starts[i] / total) + "%"; b.title = `${i + 1}. ${s.title}`; b.setAttribute("aria-label", `Chapter ${i + 1}: ${s.title}`);
+  b.addEventListener("click", (e) => { e.stopPropagation(); seek(i, true); }); track.appendChild(b); });
+track.addEventListener("click", (e) => { const r = track.getBoundingClientRect(), t = (e.clientX - r.left) / r.width * total; let i = 0; while (i < STEPS.length - 1 && starts[i + 1] <= t) i++; seek(i, true); });
+track.addEventListener("keydown", (e) => { if (e.key === "ArrowRight") { e.stopPropagation(); seek(Math.min(STEPS.length - 1, tour.ch + 1), tour.playing); } if (e.key === "ArrowLeft") { e.stopPropagation(); seek(Math.max(0, tour.ch - 1), tour.playing); } });
+function caption(i) { $("chapNo").textContent = `${i + 1}/${STEPS.length} · ${STEPS[i].title}`; $("chapText").textContent = STEPS[i].text; }
+function tick() {
+  if (!tour.playing) return; const el2 = Math.min(starts[tour.ch] + (performance.now() - tour.chStart) / 1000, starts[tour.ch] + STEPS[tour.ch].dur);
+  $("fill").style.width = (100 * el2 / total) + "%"; $("clock").textContent = fmtT(el2) + " / " + fmtT(total); track.setAttribute("aria-valuenow", Math.round(100 * el2 / total)); requestAnimationFrame(tick);
+}
+async function playFrom(i) {
+  const run = ++tour.run; tour.playing = true; $("play").textContent = "Pause"; requestAnimationFrame(tick);
+  try {
+    for (let c = i; c < STEPS.length; c++) {
+      tour.ch = c; tour.chStart = performance.now(); caption(c);
+      await STEPS[c].play(run); const left = STEPS[c].dur * 1000 - (performance.now() - tour.chStart); if (left > 0) await sleep(left, run);
+    }
+    tour.playing = false; tour.done = true; $("play").textContent = "Replay"; $("fill").style.width = "100%"; $("clock").textContent = fmtT(total) + " / " + fmtT(total); cursor.classList.remove("on");
+  } catch (e) { if (e !== CANCEL) throw e; }
+}
+function pause() { tour.run++; tour.playing = false; $("play").textContent = "Resume"; clearHL(); }
+function seek(i, andPlay) { tour.run++; resetInstrument(); for (let c = 0; c < i; c++) STEPS[c].fast(); tour.ch = i; caption(i); $("fill").style.width = (100 * starts[i] / total) + "%"; $("clock").textContent = fmtT(starts[i]) + " / " + fmtT(total); if (andPlay) playFrom(i); else { tour.playing = false; $("play").textContent = "Resume"; } }
+$("play").addEventListener("click", () => { if (tour.playing) pause(); else if (tour.done) { tour.done = false; seek(0, true); } else seek(tour.ch, true); });
+function userTookOver() { if (tour.playing) { pause(); cursor.classList.remove("on"); $("chapText").textContent = "Paused because you took control. Press Resume to continue the tour."; } }
+
+
+// ---------------- breadcrumbs: Section › Subsection on every slide ----------------
+function crumbs() {
+  document.querySelectorAll("section.slide").forEach((sl) => {
+    const label = `${sl.dataset.deck} › ${sl.dataset.sub}`;
+    let eb = sl.querySelector(".eyebrow");
+    if (!eb) { eb = document.createElement("div"); eb.className = "eyebrow"; const h = sl.querySelector("h1,h2,.statement"); (h || sl.firstElementChild).insertAdjacentElement("beforebegin", eb); }
+    let c = eb.querySelector(".crumb");
+    if (!c) { c = document.createElement("span"); c.className = "crumb"; eb.prepend(c); }
+    c.textContent = label;
+    const first = c.nextElementSibling; if (first && !first.classList.contains("chip")) first.remove();  // old section label replaced by the crumb
+  });
+}
+crumbs();
+
+// ---------------- deck navigation ----------------
+const slides = Array.from(document.querySelectorAll(".slide")); let cur = 0;
+document.querySelectorAll(".nTotal").forEach((e) => e.textContent = slides.length);
+const deckNames = [...new Set(slides.map((s) => s.dataset.deck))];
+deckNames.forEach((d) => { const b = document.createElement("button"); b.textContent = d; b.addEventListener("click", () => go(slides.findIndex((s) => s.dataset.deck === d))); $("decks").appendChild(b); });
+slides.forEach((s, i) => { const b = document.createElement("button"); b.setAttribute("aria-label", `Slide ${i + 1}: ${s.getAttribute("aria-label")}`); b.addEventListener("click", () => go(i)); $("dots").appendChild(b); });
+function go(i) {
+  cur = Math.max(0, Math.min(slides.length - 1, i));
+  slides.forEach((s, j) => { s.classList.toggle("active", j === cur); s.setAttribute("aria-hidden", wide() && j !== cur ? "true" : "false"); if ("inert" in s) s.inert = wide() && j !== cur; });
+  [...$("dots").children].forEach((b, j) => b.setAttribute("aria-current", j === cur));
+  [...$("decks").children].forEach((b) => b.setAttribute("aria-current", b.textContent === slides[cur].dataset.deck));
+  $("counter").textContent = `${cur + 1} / ${slides.length}`;
+  if (slides[cur].id !== "tour" && tour.playing) pause();
+  if (slides[cur].id === "tour" && wide() && !reduced && !tour.playing && !tour.done && tour.run === 0 && false) setTimeout(() => { if (slides[cur].id === "tour" && tour.run === 0) seek(0, true); }, 900);
+  if (slides[cur].id === "placement") runKCurve();
+  try { history.replaceState(null, "", "#" + slides[cur].id); } catch (e) {}
+}
+$("prev").addEventListener("click", () => go(cur - 1)); $("next").addEventListener("click", () => go(cur + 1));
+addEventListener("keydown", (e) => { if (!wide() || e.target.closest("input,select,textarea")) return; if (["ArrowRight", "PageDown"].includes(e.key)) { go(cur + 1); e.preventDefault(); } if (["ArrowLeft", "PageUp"].includes(e.key)) { go(cur - 1); e.preventDefault(); } });
+let tx = null; $("stage").addEventListener("touchstart", (e) => { tx = e.touches[0].clientX; }, {passive: true});
+$("stage").addEventListener("touchend", (e) => { if (tx === null || !wide()) return; const dx = e.changedTouches[0].clientX - tx; if (Math.abs(dx) > 60 && !e.target.closest(".instrument")) go(cur + (dx < 0 ? 1 : -1)); tx = null; });
+addEventListener("resize", () => go(cur));
+
+// ---------------- charts ----------------
+const M = {l: 64, r: 18, t: 14, b: 40};
+function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; return 10 * p; }
+function yAxis(svg, CW, CH, ymax, ticks, fmt) { for (let i = 0; i <= ticks; i++) { const v = ymax * i / ticks, y = M.t + (CH - M.t - M.b) * (1 - i / ticks);
+  el("line", {x1: M.l, x2: CW - M.r, y1: y, y2: y, class: i ? "grid" : "axis"}, svg); const t = el("text", {x: M.l - 8, y: y + 4, "text-anchor": "end"}, svg); t.textContent = fmt(v); } }
+const yOf = (v, ymax, CH) => M.t + (CH - M.t - M.b) * (1 - v / ymax);
+function hover(elm, html) { elm.addEventListener("mousemove", (e) => showTip(e, html)); elm.addEventListener("mouseleave", hideTip); }
+function linesChart(svg, xlabels, series, xTitle, fmt) {
+  const [, , CW, CH] = svg.getAttribute("viewBox").split(" ").map(Number); svg.replaceChildren();
+  const ymax = niceMax(Math.max(...series.flatMap((s) => s.values)) * 1.08); yAxis(svg, CW, CH, ymax, 4, fmt);
+  const xOf = (i) => M.l + 16 + (CW - M.l - M.r - 110) * i / (xlabels.length - 1);
+  xlabels.forEach((l, i) => { const t = el("text", {x: xOf(i), y: CH - M.b + 17, "text-anchor": "middle"}, svg); t.textContent = l; });
+  const xt = el("text", {x: (CW + M.l) / 2, y: CH - 4, "text-anchor": "middle"}, svg); xt.textContent = xTitle;
+  for (const s of series) {
+    el("path", {d: s.values.map((v, i) => (i ? "L" : "M") + xOf(i) + "," + yOf(v, ymax, CH)).join(" "), stroke: s.color, "stroke-width": 2, fill: "none", "stroke-dasharray": s.dash || "none"}, svg);
+    s.values.forEach((v, i) => { const c = el("circle", {cx: xOf(i), cy: yOf(v, ymax, CH), r: 4.5, fill: s.color, stroke: "var(--surface)", "stroke-width": 2}, svg); hover(c, `${s.name}<br>${xlabels[i]}: ${fmt(v)}`); });
+    const t = el("text", {x: xOf(s.values.length - 1) + 10, y: yOf(s.values[s.values.length - 1], ymax, CH) + 4 + (s.dy || 0), class: "ttl"}, svg); t.textContent = s.name;
+  }
+}
+function hbars(svg, items, xmax, fmt, target) {
+  const [, , CW, CH] = svg.getAttribute("viewBox").split(" ").map(Number); svg.replaceChildren();
+  const L = 230, R = 60, rowH = (CH - 30) / items.length, xOf = (v) => L + (CW - L - R) * v / xmax;
+  for (let i = 0; i <= 4; i++) { const v = xmax * i / 4, x = xOf(v); el("line", {x1: x, x2: x, y1: 4, y2: CH - 24, class: i ? "grid" : "axis"}, svg); const t = el("text", {x, y: CH - 8, "text-anchor": "middle"}, svg); t.textContent = fmt(v); }
+  items.forEach((it, i) => { const y = 6 + i * rowH, h = Math.min(22, rowH * 0.62), yy = y + (rowH - h) / 2;
+    const lab = el("text", {x: L - 10, y: yy + h / 2 + 4, "text-anchor": "end", class: it.strong ? "ttl" : ""}, svg); lab.textContent = it.label;
+    const w = Math.max(2, xOf(it.value) - L);
+    const r = el("path", {d: `M${L},${yy} H${L + w - 4} Q${L + w},${yy} ${L + w},${yy + 4} V${yy + h - 4} Q${L + w},${yy + h} ${L + w - 4},${yy + h} H${L} Z`, fill: it.color}, svg); hover(r, `${it.label}<br>${fmt(it.value)}${it.note ? "<br>" + it.note : ""}`);
+    const v = el("text", {x: L + w + 6, y: yy + h / 2 + 4, class: "ttl"}, svg); v.textContent = fmt(it.value); });
+  if (target !== undefined) { const x = xOf(target); el("line", {x1: x, x2: x, y1: 0, y2: CH - 24, stroke: "var(--ink)", "stroke-width": 1.5, "stroke-dasharray": "5 4"}, svg); const t = el("text", {x: x + 4, y: 10, class: "ttl"}, svg); t.textContent = "target " + fmt(target); }
+}
+
+// ---------------- report + evidence content ----------------
+const LAD = D.ladder, rows = LAD.rows;
+const find = (re) => rows.find((r) => re.test(r.model));
+const best = find(/^Random forest \+/), constR = find(/^Constant/), phys = find(/^Physics: /), physR = find(/^Physics \+/);
+const HY = D.hybrid, hyb = find(/^Hybrid/), temp = find(/temperature/), rfRaw = find(/^Random forest \(24/);
+const hR = HY.rows, hPhys = hR.find((r) => /^Physics/.test(r.model)), hRf = hR.find((r) => /^Random forest/.test(r.model));
+const smaller = Math.round(100 * (1 - hyb.region_size / hPhys.region_size)) + " %";
+function fillReport() {
+  if ($("ldA")) $("ldA").textContent = smaller;
+  if ($("ldCov")) $("ldCov").textContent = `${Math.round(hyb["coverage80_%"])} % for 80 %`;
+  $("kpis").dataset.legacy = "1"; if (false) $("kpis").innerHTML =
+    `<div class="kpi"><b class="num">${fmtM(hyb.median_err_m)}</b><span>median distance to the leak with the hybrid, against ${fmtM(constR.median_err_m)} for the best constant guess</span></div>` +
+    `<div class="kpi"><b class="num">${Math.round(hyb["coverage80_%"])} %</b><span>of the hybrid’s 80 % search regions held the leak; the raw forest’s held ${Math.round(hRf["coverage80_%"])} %</span></div>` +
+    `<div class="kpi"><b class="num">${smaller}</b><span>fewer junctions in the 80 % region than the physics model (${hyb.region_size.toFixed(1)} vs ${hPhys.region_size.toFixed(1)} junctions)</span></div>`;
+  const q2 = 2, share = (100 * q2 / D.system_demand_lps).toFixed(1);
+  $("stmt").innerHTML = `A leak losing <em>${Math.round(q2 * 86.4)} m³ a day</em> is ${share} % of this network’s flow.`;
+  $("supMed").textContent = D.superposition.median_max_abs_error_m.toFixed(3);
+  const dg = D.diagnosis; $("dg1").textContent = `${dg.noleak_over_10m_before} → ${dg.noleak_over_10m_after} of ${dg.noleak_runs}`;
+  $("dg2").textContent = `${D.noise_std_raw_m.toFixed(3)} → ${D.noise_std_cm_removed_m.toFixed(3)} m`;
+  $("diagCap").textContent = `Hourly residual at junction ${dg.node} in a leak-free run (scenario ${dg.scenario}). With rule-based controls the largest false residual reached ${dg.max_abs_before_m.toFixed(1)} m; with the schedule, ${dg.max_abs_after_m.toFixed(1)} m across all leak-free runs.`;
+  const hours = dg.hourly_before_m.map((_, i) => i);
+  linesChart($("chDiag"), hours.map((h) => (h % 4 === 0 ? String(h) : "")), [
+    {name: "rule-based", color: "var(--warm)", values: dg.hourly_before_m.map(Math.abs)},
+    {name: "SCADA schedule", color: "var(--water)", values: dg.hourly_after_m.map(Math.abs), dy: 12}], "hour of day", (v) => v.toFixed(v < 10 ? 1 : 0) + " m");
+}
+const short = (m) => m.replace(" (24 h means)", "").replace(" (hourly profiles)", "").replace("Physics: Bayesian signature matcher", "Physics matcher").replace(" + min-expected-distance pick", " + decision rule").replace(/Constant: network centre.*/, "Constant: centre").replace("Forest, temperature-calibrated", "Forest, temperature-scaled").replace(/Hybrid: .*/, "Hybrid (this work)");
+function fillEvidence() {
+  const stepName = {"0": "0 · baseline", "1": "1 · ensemble", "1b": "1b · physics", "2": "2 · decision rule", "2h": "2 · calibration"};
+  $("ladTable").innerHTML = `<tr><th>Step</th><th>Model</th><th>Median</th><th>Mean</th><th>80 % cover</th><th>Region</th></tr>` +
+    rows.map((r) => `<tr class="${r === hyb ? "best" : ""}"><td><span class="step">${stepName[r.step]}</span></td><td class="m">${short(r.model)}</td><td>${fmtM(r.median_err_m)}</td><td>${fmtM(r.mean_err_m)}</td><td>${r["coverage80_%"] !== undefined ? Math.round(r["coverage80_%"]) + " %" : "—"}</td><td>${r.region_size !== undefined ? r.region_size.toFixed(1) : "—"}</td></tr>`).join("");
+  hbars($("chLadder"), rows.map((r) => ({label: short(r.model), value: r.median_err_m, color: r === hyb ? "var(--water)" : r.step.startsWith("2") ? "var(--ink-2)" : "var(--ink-3)", strong: r === hyb, note: "step " + r.step + (r["coverage80_%"] !== undefined ? ` · 80 % region held the leak ${Math.round(r["coverage80_%"])} %` : "")})), niceMax(Math.max(...rows.map((r) => r.median_err_m))), fmtM);
+  const series = [
+    {name: "constant centre", color: "var(--ink-3)", dash: "5 4", values: constR.median_err_by_size_m},
+    {name: "physics + rule", color: "var(--warm)", values: physR.median_err_by_size_m, dy: -8},
+    {name: "hybrid", color: "var(--water)", values: hyb.median_err_by_size_m, dy: 10}];
+  $("sizeLegend").innerHTML = series.map((s) => `<span><i class="sw" style="background:${s.color}"></i>${s.name}</span>`).join("");
+  linesChart($("chSize"), LAD.bins.map((b) => b + " L/s"), series, "leak size", fmtM);
+  fillMismatch();
+}
+const MM = D.mismatch, MM_LEVELS = {clean: "None", r10: "Roughness 10 %", r20: "Roughness 20 %", r30: "Roughness 30 %", d10: "Demand 10 %", d20: "Demand 20 %", d30: "Demand 30 %", r20d20: "Both 20 %"};
+const mmGet = (level, obs, model) => MM.summary.find((r) => r.level === level && r.obs === obs && r.model === model);
+function fillMismatch() {
+  const pc = (v) => Math.round(v) + " %";
+  $("misTable").innerHTML = `<tr><th>Model error</th><th>Old: vs model</th><th>vs baseline</th><th>+ recalibrated</th><th>Median</th><th>Worst city</th></tr>` +
+    Object.entries(MM_LEVELS).map(([lv, name]) => { const a = mmGet(lv, "absolute", "Hybrid"), d = mmGet(lv, "differential", "Hybrid"), r = mmGet(lv, "differential", "Hybrid, recalibrated");
+      return `<tr class="${lv === "r20d20" ? "best" : ""}"><td class="m">${name}</td><td>${pc(a.coverage80)}</td><td>${pc(d.coverage80)}</td><td>${pc(r.coverage80)}</td><td>${fmtM(r.median_err_m)}</td><td>${pc(r.coverage80_min)}</td></tr>`; }).join("");
+  const svg = $("chMis"), [, , CW, CH] = svg.getAttribute("viewBox").split(" ").map(Number); svg.replaceChildren();
+  const pts = MM.rows.filter((r) => r.obs === "differential" && r.model === "Hybrid, recalibrated");
+  const xmax = Math.ceil(Math.max(...pts.map((q) => q.baseline_m))), xOf = (v) => M.l + (CW - M.l - M.r) * v / xmax;
+  yAxis(svg, CW, CH, 100, 4, (v) => v + " %");
+  for (let v = 0; v <= xmax; v += 2) { const t = el("text", {x: xOf(v), y: CH - M.b + 17, "text-anchor": "middle"}, svg); t.textContent = v + " m"; }
+  const xt = el("text", {x: (CW + M.l) / 2, y: CH - 4, "text-anchor": "middle"}, svg); xt.textContent = "leak-free baseline residual";
+  el("line", {x1: M.l, x2: CW - M.r, y1: yOf(80, 100, CH), y2: yOf(80, 100, CH), stroke: "var(--ink-3)", "stroke-dasharray": "5 4"}, svg);
+  el("line", {x1: xOf(4), x2: xOf(4), y1: M.t, y2: CH - M.b, stroke: "var(--ink)", "stroke-width": 1.5, "stroke-dasharray": "5 4"}, svg);
+  const lt = el("text", {x: xOf(4) + 6, y: M.t + 12, class: "ttl"}, svg); lt.textContent = "recalibrate the model first →";
+  for (const q of pts) { const c = el("circle", {cx: xOf(q.baseline_m), cy: yOf(q["coverage80_%"], 100, CH), r: 5, fill: q.baseline_m < 4 ? "var(--water)" : "var(--warm)", stroke: "var(--surface)", "stroke-width": 1.5}, svg);
+    hover(c, `${MM_LEVELS[q.level]} · city ${q.city}<br>baseline ${q.baseline_m.toFixed(2)} m<br>80 % area held the leak ${q["coverage80_%"].toFixed(1)} %<br>median ${fmtM(q.median_err_m)}`); }
+}
+
+
+// ---------------- definitive titles (numbers from the data, never typed) ----------------
+function setTitles() {
+  const dg = D.diagnosis, pct = (a, b) => Math.round(100 * (1 - b / a));
+  $("tDiag").textContent = `Two confounders removed: pump switching (false residuals > 10 m in ${dg.noleak_over_10m_before} → ${dg.noleak_over_10m_after} of ${dg.noleak_runs} leak-free runs) and network-wide demand noise (${D.noise_std_raw_m.toFixed(3)} → ${D.noise_std_cm_removed_m.toFixed(3)} m)`;
+  $("tDiagChart").textContent = `Rule-based pump control: false residuals up to ${dg.max_abs_before_m.toFixed(1)} m; SCADA schedule: at most ${dg.max_abs_after_m.toFixed(1)} m`;
+  const ex = HY.examples[Math.min(1, HY.examples.length - 1)];
+  $("tHybrid").textContent = `Log-linear pooling (${HY.fusion_ab[0]} · forest + ${HY.fusion_ab[1]} · physics): on a ${ex.leak_lps.toFixed(1)} L/s test leak, the forest’s ${ex.forest.region_k}-junction region misses; the hybrid’s ${ex.hybrid.region_k}-junction region contains the leak`;
+  $("tFront").textContent = `Hybrid: ${Math.round(hyb["coverage80_%"])} % coverage of nominal 80 % regions with ${hyb.region_size.toFixed(1)} junctions, ${smaller} fewer than physics (${hPhys.region_size.toFixed(1)}), at ${Math.round(hyb.median_err_m).toLocaleString()} m median error`;
+  const dev = (k) => Math.max(...HY.reliability[k].map((p) => Math.abs(100 * (p.coverage - p.level))));
+  const under = Math.max(...HY.reliability["Random forest (16k fit)"].map((p) => 100 * (p.level - p.coverage)));
+  $("tRel").textContent = `Hybrid coverage stays within ${dev("Hybrid: forest × physics (fitted pooling)").toFixed(1)} points of the stated level from 50 to 95 %; the raw forest under-covers by up to ${under.toFixed(1)} points`;
+  $("tDec").textContent = `Minimum-expected-distance pick cuts median error by ${pct(rfRaw.median_err_m, best.median_err_m)} % (forest) and ${pct(phys.median_err_m, physR.median_err_m)} % (physics) versus the most-likely pick`;
+  $("tLad").textContent = `Benchmark ladder: forest ${Math.round(rfRaw.median_err_m).toLocaleString()} m beats the physics matcher ${Math.round(phys.median_err_m).toLocaleString()} m; constant guess ${Math.round(constR.median_err_m).toLocaleString()} m; hybrid ${Math.round(hyb.median_err_m).toLocaleString()} m at ${Math.round(hyb["coverage80_%"])} % coverage`;
+  const mmR = mmGet("r20d20", "differential", "Hybrid, recalibrated"), mmA = mmGet("r20d20", "absolute", "Hybrid"), tb = MM.trust_check.bands;
+  $("tMis").textContent = `With 20 % wrong roughness and demands, the 80 % area held the leak ${Math.round(mmA.coverage80)} % of the time against the model, ${Math.round(mmR.coverage80)} % against a leak-free baseline with recalibrated weights; cities with baseline residual under 4 m never fell below ${Math.round(Math.min(tb[0].coverage80_min, tb[1].coverage80_min))} %`;
+  const bs = hyb.median_err_by_size_m;
+  $("tSize").textContent = `Hybrid median error falls from ${fmtM(bs[0])} (0.5–1 L/s) to ${fmtM(bs[bs.length - 1])} (8–16 L/s); constant guess ${fmtM(constR.median_err_m)} at every size`;
+}
+// ---------------- what's new: hybrid visuals ----------------
+function netSvg(svg, opts) { // static network map with a probability layer; opts {p, leak, region, pick, argmax, scale}
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.replaceChildren();
+  for (const l of D.links) { const a = posOf[l.a], b = posOf[l.b]; if (a && b) el("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: "var(--pipe)", "stroke-width": l.type === "Pump" ? 2.4 : 1.4, "stroke-dasharray": l.type === "Pump" ? "3 3" : "none"}, svg); }
+  const pmax = Math.max(...opts.p);
+  D.nodes.forEach((n, i) => { const [x, y] = posOf[n]; const p = opts.p[i]; if (p > 0.002) el("circle", {cx: x, cy: y, r: 4 + 22 * Math.sqrt(p / pmax), fill: heat(p / pmax), "fill-opacity": 0.8}, svg); el("circle", {cx: x, cy: y, r: 2.6, fill: "var(--surface)", stroke: "var(--ink-3)", "stroke-width": 1}, svg); });
+  for (const c of opts.region || []) { const [x, y] = posOf[D.nodes[c]]; el("circle", {cx: x, cy: y, r: 7.5, fill: "none", stroke: "var(--heat-2)", "stroke-width": 1.5, "stroke-dasharray": "2 2"}, svg); }
+  for (const s of sensors6) { const [x, y] = posOf[D.nodes[s]]; el("path", {d: `M${x},${y - 7} L${x + 7},${y} L${x},${y + 7} L${x - 7},${y} Z`, fill: "var(--water)", stroke: "var(--surface)", "stroke-width": 1.5}, svg); }
+  if (opts.argmax !== undefined) { const [x, y] = posOf[D.nodes[opts.argmax]]; el("circle", {cx: x, cy: y, r: 11, fill: "none", stroke: "var(--ink)", "stroke-width": 2.2}, svg); }
+  if (opts.pick !== undefined) { const [x, y] = posOf[D.nodes[opts.pick]]; el("rect", {x: x - 9, y: y - 9, width: 18, height: 18, fill: "none", stroke: opts.pickColor || "var(--ink)", "stroke-width": 2.5}, svg); }
+  const [lx, ly] = posOf[D.nodes[opts.leak]];
+  el("circle", {cx: lx, cy: ly, r: 13, fill: "none", stroke: "var(--leak)", "stroke-width": 3}, svg);
+  el("path", {d: `M${lx - 19},${ly} H${lx - 8} M${lx + 8},${ly} H${lx + 19} M${lx},${ly - 19} V${ly - 8} M${lx},${ly + 8} V${ly + 19}`, stroke: "var(--leak)", "stroke-width": 3}, svg);
+}
+const sensors6 = greedyIdx.slice(0, 6);
+const regionOf = (p) => { const o = Array.from(p.keys()).sort((a, b) => p[b] - p[a]); const r = []; let acc = 0; for (const c of o) { r.push(c); acc += p[c]; if (acc >= 0.8) break; } return r; };
+function fillNovelty() {
+  const ex = HY.examples[Math.min(1, HY.examples.length - 1)], leak = D.nodes.indexOf(ex.leak);
+  const panes = [["physics", "Physics matcher", "region contains the leak"], ["forest", "Random forest", "region misses the leak"], ["hybrid", "Hybrid (this work)", "region contains the leak"]];
+  $("trio").innerHTML = panes.map(([k, t, s]) => `<div class="mini${k === "hybrid" ? " hero" : ""}"><h3>${t} · <span style="font-weight:500">${s}</span></h3><svg id="mini_${k}" role="img" aria-label="${t} probability map"></svg><div class="facts"><span>80 % region <b>${ex[k].region_k}</b> junctions</span><span>holds the leak <b>${ex[k].holds ? "yes" : "no"}</b></span><span>best guess off by <b>${fmtM(ex[k].err_m)}</b></span></div></div>`).join("");
+  for (const [k] of panes) { const p = ex[k].p; netSvg($("mini_" + k), {p, leak, region: regionOf(p), pick: D.nodes.indexOf(ex[k].pick), pickColor: k === "hybrid" ? "var(--water)" : "var(--ink)"}); }
+  $("liveNote").innerHTML = `<b>Live on page 1.</b> The platform runs a compact ${FO.trees}-tree forest in your browser; compression costs ${Math.round(100 * (FO.hybrid.median_err_m / FO.full_hybrid.median_err_m - 1))} % in median error (${Math.round(FO.hybrid.median_err_m).toLocaleString()} m vs ${Math.round(FO.full_hybrid.median_err_m).toLocaleString()} m for the 400-tree model) and keeps calibration (${Math.round(FO.hybrid["coverage80_%"])} % of 80 % regions held the leak).`;
+  $("fa").textContent = HY.fusion_ab[0].toFixed(1); $("fb").textContent = HY.fusion_ab[1].toFixed(1); $("valN").textContent = HY.val_n.toLocaleString();
+  $("trioCap").textContent = `Held-out test leak of ${ex.leak_lps.toFixed(1)} L/s at junction ${ex.leak}, 6 sensors (blue diamonds). Cases like this, where the forest’s region misses and the hybrid’s holds, are ${(100 * HY.rescued_share).toFixed(1)} % of all test leaks; the averages on the next slides are what to judge by.`;
+  // frontier scatter
+  const pts = [[hRf, "Random forest", "var(--ink-2)"], [hPhys, "Physics matcher", "var(--warm)"], [temp, "Forest, temperature-scaled", "var(--ink-3)"], [hyb, "Hybrid (this work)", "var(--water)"]];
+  const svg = $("chFront"); svg.replaceChildren(); const CW = 560, CH = 330, L = 64, R = 20, T = 16, B = 44;
+  const xmin = 800, xmax = 1300, ymin = 60, ymax = 95, xOf = (v) => L + (CW - L - R) * (v - xmin) / (xmax - xmin), yOf2 = (v) => T + (CH - T - B) * (1 - (v - ymin) / (ymax - ymin));
+  el("rect", {x: L, y: yOf2(82), width: CW - L - R, height: yOf2(78) - yOf2(82), fill: "var(--water)", "fill-opacity": 0.08}, svg);
+  for (let v = 60; v <= 95; v += 5) { const y = yOf2(v); el("line", {x1: L, x2: CW - R, y1: y, y2: y, class: v === 60 ? "axis" : "grid"}, svg); const t = el("text", {x: L - 8, y: y + 4, "text-anchor": "end"}, svg); t.textContent = v + " %"; }
+  for (let v = 800; v <= 1300; v += 100) { const x = xOf(v); const t = el("text", {x, y: CH - B + 18, "text-anchor": "middle"}, svg); t.textContent = fmtM(v); }
+  const xt = el("text", {x: (CW + L) / 2, y: CH - 6, "text-anchor": "middle"}, svg); xt.textContent = "median distance from best guess to leak (lower is better)";
+  const yt = el("text", {x: 14, y: T + 4, "text-anchor": "start"}, svg); yt.textContent = "80 % region held leak";
+  const ly = el("line", {x1: L, x2: CW - R, y1: yOf2(80), y2: yOf2(80), stroke: "var(--ink)", "stroke-dasharray": "5 4", "stroke-width": 1.2}, svg);
+  for (const [r, name, color] of pts) { const x = xOf(r.median_err_m), y = yOf2(r["coverage80_%"]), rad = 3 + 2.2 * Math.sqrt(r.region_size);
+    const c = el("circle", {cx: x, cy: y, r: rad, fill: color, "fill-opacity": 0.85, stroke: "var(--surface)", "stroke-width": 2}, svg);
+    hover(c, `${name}<br>median ${fmtM(r.median_err_m)} · 80 % region held ${Math.round(r["coverage80_%"])} %<br>region ${r.region_size.toFixed(1)} junctions`);
+    const t = el("text", {x: x + rad + 6, y: y + 4, class: "ttl"}, svg); t.textContent = name; if (x > CW - 170) { t.setAttribute("x", x - rad - 6); t.setAttribute("text-anchor", "end"); } }
+  const bs = HY.bootstrap_vs_temp;
+  $("fr1").textContent = smaller; $("fr2").textContent = Math.round(-bs.expected_err_m.mean) + " m";
+  $("fr2ci").textContent = `${Math.round(-bs.expected_err_m.ci95[1])}–${Math.round(-bs.expected_err_m.ci95[0])} m`;
+  $("fr3").textContent = (-bs.region_size.mean).toFixed(1); $("fr3ci").textContent = `${(-bs.region_size.ci95[1]).toFixed(2)}–${(-bs.region_size.ci95[0]).toFixed(2)}`;
+  // reliability diagram
+  const rel = HY.reliability, series = [["Random forest (16k fit)", "raw forest", "var(--ink-2)", "none"], ["Physics matcher", "physics", "var(--warm)", "none"], ["Forest, temperature-calibrated", "temperature-scaled forest", "var(--ink-3)", "5 4"], ["Hybrid: forest × physics (fitted pooling)", "hybrid", "var(--water)", "none"]];
+  $("relLegend").innerHTML = series.map(([, n, c, d]) => `<span><i class="sw" style="background:${c}${d !== "none" ? ";opacity:.7" : ""}"></i>${n}</span>`).join("");
+  const s2 = $("chRel"); s2.replaceChildren(); const lo = 0.45, hi = 1.0, xO = (v) => L + (CW - L - R) * (v - lo) / (hi - lo), yO = (v) => T + (CH - T - B) * (1 - (v - lo) / (hi - lo));
+  for (let v = 0.5; v <= 1.0001; v += 0.1) { const y = yO(v), x = xO(v); el("line", {x1: L, x2: CW - R, y1: y, y2: y, class: "grid"}, s2); el("line", {x1: x, x2: x, y1: T, y2: CH - B, class: "grid"}, s2);
+    const t = el("text", {x: L - 8, y: y + 4, "text-anchor": "end"}, s2); t.textContent = Math.round(v * 100) + " %"; const t2 = el("text", {x, y: CH - B + 18, "text-anchor": "middle"}, s2); t2.textContent = Math.round(v * 100) + " %"; }
+  el("line", {x1: xO(lo), y1: yO(lo), x2: xO(hi), y2: yO(hi), stroke: "var(--ink)", "stroke-width": 1, "stroke-dasharray": "2 3"}, s2);
+  const dl = el("text", {x: xO(0.93), y: yO(0.97), "text-anchor": "end"}, s2); dl.textContent = "calibrated";
+  const xt2 = el("text", {x: (CW + L) / 2, y: CH - 6, "text-anchor": "middle"}, s2); xt2.textContent = "stated confidence of the search region";
+  for (const [key, name, color, dash] of series) { const pts2 = rel[key];
+    el("path", {d: pts2.map((p, i) => (i ? "L" : "M") + xO(p.level) + "," + yO(p.coverage)).join(" "), stroke: color, "stroke-width": 2, fill: "none", "stroke-dasharray": dash}, s2);
+    pts2.forEach((p) => { const c = el("circle", {cx: xO(p.level), cy: yO(p.coverage), r: 4, fill: color, stroke: "var(--surface)", "stroke-width": 1.5}, s2); hover(c, `${name}<br>stated ${Math.round(100 * p.level)} % → held ${(100 * p.coverage).toFixed(1)} %<br>region ${p.size.toFixed(1)} junctions`); }); }
+  // decision rule: live example + ladder comparison
+  const r = makeRng(99); let found = null;
+  for (let t = 0; t < 400 && !found; t++) { const leak2 = Math.floor(r() * N), q = 0.8 + r() * 0.8, f = observe(leak2, q, 1, NCOV + Math.floor(r() * (NOISE.length - NCOV)), r), p = locate(f, sensors6.slice().sort((a, b) => a - b), 1);
+    let am = 0; for (let c = 1; c < N; c++) if (p[c] > p[am]) am = c; const s = summarize(p, leak2);
+    if (DIST[leak2][am] - s.err > 1500 && s.err < 1500) found = {leak: leak2, q, p, am, pick: s.best, errA: DIST[leak2][am], errR: s.err}; }
+  if (found) { netSvg($("decMap"), {p: found.p, leak: found.leak, region: regionOf(found.p), argmax: found.am, pick: found.pick, pickColor: "var(--water)"});
+    $("decTitle").textContent = `A ${found.q.toFixed(1)} L/s leak, physics locator, live in your browser`;
+    $("decCap").textContent = `The most likely junction is ${fmtM(found.errA)} from the leak; the minimum-expected-distance pick is ${fmtM(found.errR)} away. One illustrative draw; the chart on the right is the average.`; }
+  const pairs = [[rfRaw, best, "Random forest"], [phys, physR, "Physics matcher"]];
+  const items = []; for (const [a, b, n] of pairs) { items.push({label: n + " · most likely", value: a.median_err_m, color: "var(--ink-3)"}); items.push({label: n + " · decision rule", value: b.median_err_m, color: "var(--water)", strong: true}); }
+  hbars($("chDec"), items, niceMax(Math.max(...items.map((i) => i.value))), fmtM);
+}
+
+// ---------------- city planner ----------------
+const CITIES = D.cities || [];
+const knee = (c) => { const g = c.greedy_curve.map((x) => x.greedy_m), best = Math.min(...g); return c.greedy_curve.find((x) => x.greedy_m <= best + 0.1 * (g[0] - best)).k; };
+const errAt = (c, k) => (c.greedy_curve.find((x) => x.k === k) || c.greedy_curve[c.greedy_curve.length - 1]).greedy_m;
+let cityIdx = Math.max(0, CITIES.findIndex((c) => c.name === "Net3"));
+function drawCity() {
+  if (!CITIES.length) return;
+  const c = CITIES[cityIdx], k = +$("cityK").value, svg = $("cityMap");
+  $("cityKOut").textContent = k;
+  [...$("citySeg").children].forEach((b, i) => b.setAttribute("aria-pressed", i === cityIdx));
+  const all = c.xy.concat(c.other.map((o) => o.xy)), xs2 = all.map((p) => p[0]), ys2 = all.map((p) => p[1]);
+  const x0 = Math.min(...xs2), x1 = Math.max(...xs2), y0 = Math.min(...ys2), y1 = Math.max(...ys2), Wc = 760, P = 20;
+  const Hc = Math.max(240, Math.min(620, Math.round((Wc - 2 * P) * (y1 - y0) / Math.max(1e-9, x1 - x0) + 2 * P)));
+  const sxc = (x) => P + (x - x0) / Math.max(1e-9, x1 - x0) * (Wc - 2 * P), syc = (y) => Hc - P - (y - y0) / Math.max(1e-9, y1 - y0) * (Hc - 2 * P);
+  svg.setAttribute("viewBox", `0 0 ${Wc} ${Hc}`); svg.replaceChildren();
+  const pos = {}; c.nodes.forEach((n, i) => pos[n] = [sxc(c.xy[i][0]), syc(c.xy[i][1])]); c.other.forEach((o) => pos[o.name] = [sxc(o.xy[0]), syc(o.xy[1])]);
+  const sw = c.nodes.length > 300 ? 0.9 : 1.4;
+  for (const [a, b, t] of c.links) { const p = pos[a], q = pos[b]; if (p && q) el("line", {x1: p[0], y1: p[1], x2: q[0], y2: q[1], stroke: t === "Pump" ? "var(--pump)" : "var(--pipe)", "stroke-width": t === "Pump" ? 2.2 : sw, "stroke-dasharray": t === "Pump" ? "3 3" : "none"}, svg); }
+  if (c.nodes.length <= 200) c.nodes.forEach((n) => { const [x, y] = pos[n]; el("circle", {cx: x, cy: y, r: 2.4, fill: "var(--surface)", stroke: "var(--ink-3)", "stroke-width": 1}, svg); });
+  for (const o of c.other) { const [x, y] = pos[o.name]; el("rect", {x: x - 6, y: y - 5, width: 12, height: 10, fill: "var(--surface)", stroke: "var(--ink)", "stroke-width": 1.5}, svg); }
+  c.greedy_order.slice(0, k).forEach((n, i) => { const [x, y] = pos[n]; el("path", {d: `M${x},${y - 8} L${x + 8},${y} L${x},${y + 8} L${x - 8},${y} Z`, fill: "var(--water)", stroke: "var(--surface)", "stroke-width": 1.5}, svg);
+    const t = el("text", {x: x + 10, y: y - 6, class: "label"}, svg); t.textContent = i + 1; });
+  const e = errAt(c, k), rk = Object.keys(c.random_curve).map(Number), nearest = rk.reduce((a, b) => (Math.abs(b - k) < Math.abs(a - k) ? b : a), rk[0]);
+  $("cErr").textContent = fmtM(e); $("cRand").textContent = `${fmtM(c.random_curve[nearest])} (at ${nearest} sensors)`; $("cGuess").textContent = fmtM(c.random_guess_m);
+  $("cKnee").textContent = `${knee(c)} sensors (${fmtM(errAt(c, knee(c)))})`;
+  const t = c.topology;
+  $("cityTopo").innerHTML = `<tr><th>${c.name}</th><th></th></tr>` + [["Junctions", t.junctions], ["Pipe length", t.pipe_km + " km"], ["Loops per 100 junctions", t.loops_per_100_junctions], ["Dead-end junctions", Math.round(100 * t.dead_end_share) + " %"], ["Tanks · reservoirs · pumps", `${t.tanks} · ${t.reservoirs} · ${t.pumps}`], ["Mean demand", c.demand_lps.toFixed(0) + " L/s"]].map(([a, b]) => `<tr><td class="m">${a}</td><td>${b}</td></tr>`).join("");
+  if ($("planFact")) { $("planFact").innerHTML = `<b>${c.name}</b>: ${k} optimized sensors → <b>${fmtM(e)}</b> expected distance, ${Math.round(100 * e / c.random_guess_m)} % of a random guess (${fmtM(c.random_guess_m)})`; $("planFact2").innerHTML = `Knee: <b>${knee(c)} sensors</b>, first count within 10 % of the best reachable error`; }
+  const ks = c.greedy_curve.map((x) => String(x.k)), rnd = c.greedy_curve.map((x) => { const kk = Object.keys(c.random_curve).map(Number); return kk.includes(x.k) ? c.random_curve[x.k] : null; });
+  const s2 = $("cityCurve"); linesChart(s2, ks, [{name: "optimized", color: "var(--water)", values: c.greedy_curve.map((x) => x.greedy_m)}], "sensors", fmtM);
+  const [, , CW, CH] = s2.getAttribute("viewBox").split(" ").map(Number);
+  const ymax = niceMax(Math.max(...c.greedy_curve.map((x) => x.greedy_m)) * 1.08), xOf = (i) => M.l + 16 + (CW - M.l - M.r - 110) * i / (ks.length - 1);
+  rnd.forEach((v, i) => { if (v === null || v > ymax) return; const cc = el("circle", {cx: xOf(i), cy: yOf(v, ymax, CH), r: 4, fill: "none", stroke: "var(--ink-2)", "stroke-width": 2}, s2); hover(cc, `random layouts, ${ks[i]} sensors<br>${fmtM(v)}`); });
+  const ki = ks.indexOf(String(k)); if (ki >= 0) el("line", {x1: xOf(ki), x2: xOf(ki), y1: M.t, y2: CH - M.b, stroke: "var(--leak)", "stroke-width": 1.5, "stroke-dasharray": "3 3"}, s2);
+}
+function fillCities() {
+  if (!CITIES.length) return;
+  $("citySeg").innerHTML = CITIES.map((c, i) => `<button type="button" data-i="${i}">${c.name} · ${c.topology.junctions}</button>`).join("");
+  [...$("citySeg").children].forEach((b) => b.addEventListener("click", () => { cityIdx = +b.dataset.i; drawCity(); }));
+  $("cityK").addEventListener("input", drawCity); drawCity();
+  // topology scatter
+  const pts = CITIES.map((c) => ({c, x: Math.max(0.5, c.topology.loops_per_100_junctions), y: 100 * errAt(c, 8) / c.random_guess_m}));
+  const svg = $("chTopo"); svg.replaceChildren(); const CW = 560, CH = 330, L = 60, R = 24, T = 16, B = 46;
+  const lx0 = Math.log10(0.5), lx1 = Math.log10(200), xO = (v) => L + (CW - L - R) * (Math.log10(v) - lx0) / (lx1 - lx0), ymax = niceMax(Math.max(...pts.map((p) => p.y)) * 1.15), yO = (v) => T + (CH - T - B) * (1 - v / ymax);
+  for (let i = 0; i <= 4; i++) { const v = ymax * i / 4, y = yO(v); el("line", {x1: L, x2: CW - R, y1: y, y2: y, class: i ? "grid" : "axis"}, svg); const t = el("text", {x: L - 8, y: y + 4, "text-anchor": "end"}, svg); t.textContent = Math.round(v) + " %"; }
+  for (const v of [1, 3, 10, 30, 100]) { const x = xO(v); el("line", {x1: x, x2: x, y1: T, y2: CH - B, class: "grid"}, svg); const t = el("text", {x, y: CH - B + 18, "text-anchor": "middle"}, svg); t.textContent = v; }
+  const xt = el("text", {x: (CW + L) / 2, y: CH - 6, "text-anchor": "middle"}, svg); xt.textContent = "loops per 100 junctions (log scale)";
+  for (const p of pts) { const r = 4 + 2.2 * Math.sqrt(p.c.topology.junctions / 10); const cc = el("circle", {cx: xO(p.x), cy: yO(p.y), r, fill: "var(--water)", "fill-opacity": 0.75, stroke: "var(--surface)", "stroke-width": 2}, svg);
+    hover(cc, `${p.c.name}: ${p.c.topology.junctions} junctions<br>loops per 100 junctions ${p.c.topology.loops_per_100_junctions}<br>error with 8 sensors ${Math.round(p.y)} % of random guess`);
+    const t = el("text", {x: xO(p.x) + r + 5, y: yO(p.y) + 4, class: "ttl"}, svg); t.textContent = p.c.name; }
+  const lo = pts.reduce((a, b) => (a.y < b.y ? a : b)), hi = pts.reduce((a, b) => (a.y > b.y ? a : b));
+  const rank = (a) => { const o = a.map((v, i) => [v, i]).sort((x, y) => x[0] - y[0]), r = []; o.forEach(([, i], k) => r[i] = k + 1); return r; };
+  const rx = rank(pts.map((p) => p.x)), ry = rank(pts.map((p) => p.y)), n = pts.length, rho = 1 - 6 * rx.reduce((s, v, i) => s + (v - ry[i]) ** 2, 0) / (n * (n * n - 1));
+  $("tTopo").textContent = `With 8 sensors, error ranges ${(hi.y / lo.y).toFixed(0)}-fold across ${n} networks: ${Math.round(lo.y)} % of a random guess in ${lo.c.name} (${lo.c.topology.loops_per_100_junctions} loops per 100 junctions) to ${Math.round(hi.y)} % in ${hi.c.name} (${hi.c.topology.loops_per_100_junctions}); rank correlation with loops per 100 junctions ρ = ${rho.toFixed(2)}`;
+  $("topoTable").innerHTML = `<tr><th>City</th><th>Junctions</th><th>Loops/100</th><th>Dead ends</th><th>Knee</th><th>8 sensors</th></tr>` +
+    pts.slice().sort((a, b) => a.y - b.y).map((p) => `<tr><td class="m">${p.c.name}</td><td>${p.c.topology.junctions}</td><td>${p.c.topology.loops_per_100_junctions}</td><td>${Math.round(100 * p.c.topology.dead_end_share)} %</td><td>${knee(p.c)}</td><td>${Math.round(p.y)} %</td></tr>`).join("");
+}
+
+
+// ---------------- narrative: message title + at most 3 short bullets, metrics as sub-bullets ----------------
+const km = (m) => fmtM(m);
+function NARR() {
+  const ex = HY.examples[Math.min(1, HY.examples.length - 1)], bs = HY.bootstrap_vs_temp, dg = D.diagnosis;
+  const devH = Math.max(...HY.reliability["Hybrid: forest × physics (fitted pooling)"].map((q) => Math.abs(100 * (q.coverage - q.level))));
+  const underF = Math.max(...HY.reliability["Random forest (16k fit)"].map((q) => 100 * (q.level - q.coverage)));
+  const pts8 = CITIES.map((c) => ({c, y: 100 * errAt(c, 8) / c.random_guess_m})), lo8 = pts8.reduce((x, y) => (x.y < y.y ? x : y)), hi8 = pts8.reduce((x, y) => (x.y > y.y ? x : y));
+  const anyt = pts8.find((q) => q.c.name === "Anytown"), hb = hyb.median_err_by_size_m;
+  return {
+    planner: {t: "More sensors shrink the search area, but each city reaches a point where extra sensors stop paying off", pts: [
+      {s: "Each city’s error curve flattens after a knee", sub: [`<span id="planFact"></span>`, `<span id="planFact2"></span>`]},
+      {s: "Every junction simulated as a leak; sensors added one at a time", sub: [`${CITIES.length} benchmark networks`, "Leak sizes 0.25–2 % of each city’s demand, for a fair comparison"]}]},
+    topology: {t: "Loops in the pipe network decide how a leak’s pressure drop spreads to sensors, but layout details beyond loops still matter", pts: [
+      {s: "Branched network: the drop follows one path, so it is easy to trace", sub: [`${lo8.c.name}: <b>${Math.round(lo8.y)} %</b> of a random guess with 8 sensors (${lo8.c.topology.loops_per_100_junctions} loops per 100 junctions)`]},
+      {s: "Loops spread the drop, so different leaks look alike to the sensors", sub: [`${anyt ? `${anyt.c.name}: ${Math.round(anyt.y)} % (${anyt.c.topology.loops_per_100_junctions} loops per 100 junctions) · ` : ""}rank correlation <b>ρ = ${topoRho().toFixed(2)}</b>`]},
+      {s: "Loops are not the whole story", sub: [`${hi8.c.name} is worst (${Math.round(hi8.y)} %) with only ${hi8.c.topology.loops_per_100_junctions} loops per 100 junctions`, "Untested hypothesis: pressure-managed districts and low flow (49 L/s)"]}]},
+    tour: {t: "With sensors installed, the platform turns pressure readings into a map of where to dig"},
+    method: {t: "We simulate thousands of leaks on a standard network model and judge every locator on the same held-out leaks", pts: [
+      {s: "Standard network model, thousands of simulated leaks", sub: ["EPANET Net3 benchmark, 92 junctions", "<b>24,000</b> training and <b>4,000</b> test leaks, different random seeds"]},
+      {s: "Realistic noise from demand and sensors", sub: ["5 % demand noise per junction-hour; 0.05 m sensor noise", "Pump schedule given to the model, as SCADA would"]},
+      {s: "Every locator judged on the same held-out leaks", sub: ["Simple guesses → tree ensembles → physics → hybrid"]}]},
+    diagnosis: {t: "Two artefacts had to be removed before any locator could work: pump switching and city-wide demand swings", pts: [
+      {s: "Pump rules created false pressure jumps larger than any leak", sub: [`Leak-free runs with a jump above 10 m: <b>${dg.noleak_over_10m_before} → ${dg.noleak_over_10m_after}</b> of ${dg.noleak_runs}`, `Largest jump: ${dg.max_abs_before_m.toFixed(1)} → ${dg.max_abs_after_m.toFixed(1)} m`]},
+      {s: "Fix 1: give the model the real pump schedule"},
+      {s: "Fix 2: subtract the city-wide demand shift", sub: [`Noise at a junction: <b>${D.noise_std_raw_m.toFixed(3)} → ${D.noise_std_cm_removed_m.toFixed(3)} m</b>`]}]},
+    hybrid: {t: "Combining the data-driven forest with the physics model gives search areas that are both small and reliable", pts: [
+      {s: "Forest: small areas, but sometimes confidently wrong", sub: [`This leak: ${ex.forest.region_k} junctions, <b>misses</b> the leak`]},
+      {s: "Physics: reliable areas, but large", sub: [`This leak: ${ex.physics.region_k} junctions, contains it; best guess ${km(ex.physics.err_m)} off`]},
+      {s: "Hybrid multiplies the two maps: small and reliable", sub: [`This leak: ${ex.hybrid.region_k} junctions, contains it; <b>best guess exact</b>`, `Weights fitted on ${HY.val_n.toLocaleString()} separate leaks: forest ${HY.fusion_ab[0]}, physics ${HY.fusion_ab[1]}`]}]},
+    frontier: {t: "The hybrid’s search areas are a quarter smaller than physics and still contain the leak as often as promised", pts: [
+      {s: "Reliable means an 80 % area holds the leak about 80 % of the time"},
+      {s: "Hybrid is reliable with fewer junctions to search", sub: [`Hybrid: <b>${Math.round(hyb["coverage80_%"])} %</b> coverage, <b>${hyb.region_size.toFixed(1)}</b> junctions`, `Physics: ${Math.round(hPhys["coverage80_%"])} %, ${hPhys.region_size.toFixed(1)} · forest: ${Math.round(hRf["coverage80_%"])} %, ${hRf.region_size.toFixed(1)}`]},
+      {s: "It also beats the standard fix for an over-confident model", sub: [`vs temperature-scaled forest: −${Math.round(-bs.expected_err_m.mean)} m expected distance (95 % CI ${Math.round(-bs.expected_err_m.ci95[1])}–${Math.round(-bs.expected_err_m.ci95[0])} m)`]}]},
+    reliab: {t: "The hybrid’s confidence matches reality at every level; the forest alone over-promises", pts: [
+      {s: "Hybrid sits on the diagonal", sub: [`Within <b>${devH.toFixed(1)} points</b> of the stated level, 50–95 %`]},
+      {s: "Forest falls below it: it over-promises", sub: [`Short by up to <b>${underF.toFixed(1)} points</b>`]},
+      {s: "Physics sits above it: areas bigger than needed"}]},
+    decision: {t: "Send the crew to the spot with the shortest expected walk, not to the single most likely spot", pts: [
+      {s: "With weak evidence, the most likely spot can be far away"},
+      {s: "The shortest-expected-walk spot falls back toward the middle"},
+      {s: "That cuts the typical walk by about a quarter", sub: [`Forest: ${km(rfRaw.median_err_m)} → <b>${km(best.median_err_m)}</b>`, `Physics: ${km(phys.median_err_m)} → <b>${km(physR.median_err_m)}</b>`]}]},
+    ladder: {t: "A standard tree ensemble beat our physics model on accuracy, which is why the hybrid combines the two", pts: [
+      {s: "Every locator judged on the same 4,000 held-out leaks"},
+      {s: "Forest found leaks closer than physics, but over-promised", sub: [`Forest ${km(rfRaw.median_err_m)} · physics ${km(phys.median_err_m)} · constant guess ${km(constR.median_err_m)}`]},
+      {s: "Hybrid: closest, with reliable areas", sub: [`<b>${km(hyb.median_err_m)}</b> median distance, ${Math.round(hyb["coverage80_%"])} % coverage`]}]},
+    bysize: {t: "Large leaks are found within about 500 m; small leaks remain the hard case", pts: [
+      {s: "Large leaks lower pressure clearly", sub: [`8–16 L/s: <b>${km(hb[hb.length - 1])}</b> median distance`]},
+      {s: "Small leaks sit close to normal demand noise", sub: [`0.5–1 L/s: ${km(hb[0])} · constant guess ${km(constR.median_err_m)}`]}]},
+    placement: {pts: [{s: "Planned layouts beat random ones with the same sensor count", sub: [`<span id="kFact">Computing in your browser…</span>`]}, {s: "The gain is largest when sensors are few"}]},
+    mismatch: {t: "Real pipe data is never exact; comparing with a leak-free baseline period, not the model alone, keeps the search areas honest", pts: [
+      {s: "Against the model alone, a 10 % pipe-data error swamps every leak", sub: [`Search areas held the leak only <b>${Math.round(mmGet("r10", "absolute", "Hybrid").coverage80)} %</b> of the time`]},
+      {s: "Fix: compare with a recent leak-free baseline, and fit weights on wrong-data cities", sub: [`Roughness error up to 20 %, demand error up to 30 %: <b>${Math.round(Math.min(...["r10", "r20", "d10", "d20", "d30", "r20d20"].map((l) => mmGet(l, "differential", "Hybrid, recalibrated").coverage80)))}–${Math.round(Math.max(...["r10", "r20", "d10", "d20", "d30", "r20d20"].map((l) => mmGet(l, "differential", "Hybrid, recalibrated").coverage80)))} %</b> coverage on average`]},
+      {s: "A check the utility can run before trusting a map", sub: [`Baseline residual under 4 m: worst city ${Math.round(Math.min(MM.trust_check.bands[0].coverage80_min, MM.trust_check.bands[1].coverage80_min))} %`, `Over 4 m: worst city ${Math.round(MM.trust_check.bands[2].coverage80_min)} %, so recalibrate the model first`]}]},
+    next: {t: "These results are simulation only; real utility data comes next", pts: [
+      {s: "Wrong pipe data is now tested, but on simulated cities"}, {s: "Next: sensor faults, two leaks, then real utility data"}]},
+    company: {t: "As a product, LeakLocate would narrow a district-level leak alarm to a few streets for the acoustic crew", pts: [
+      {s: "Utilities already get district-level leak alarms"}, {s: "Acoustic crews pinpoint leaks once they know the streets"}, {s: "LeakLocate fills the gap, using existing loggers and models"}]},
+    build: {t: "Start as a service with one utility partner, then sell per district or per verified saving", pts: [
+      {s: "First milestone: field proof with one utility"}, {s: "Then price per district, or per verified water saved"}]},
+    gaps: {t: "The biggest gap is field proof; data access, slow purchasing and incumbents follow", pts: [
+      {s: "Each gap has a concrete fix"}, {s: "None is a modelling problem"}]},
+  };
+}
+function topoRho() {
+  const pts = CITIES.map((c) => ({x: Math.max(0.5, c.topology.loops_per_100_junctions), y: errAt(c, 8) / c.random_guess_m}));
+  const rank = (a2) => { const o = a2.map((v, i) => [v, i]).sort((x, y) => x[0] - y[0]), r = []; o.forEach(([, i], k) => r[i] = k + 1); return r; };
+  const rx = rank(pts.map((q) => q.x)), ry = rank(pts.map((q) => q.y)), n = pts.length;
+  return 1 - 6 * rx.reduce((s2, v, i) => s2 + (v - ry[i]) ** 2, 0) / (n * (n * n - 1));
+}
+function narrate() {
+  for (const [id, n] of Object.entries(NARR())) {
+    const sl = document.querySelector(`section.slide#${id}`); if (!sl) continue;
+    const h = sl.querySelector("h2"); if (h && n.t) h.textContent = n.t;
+    if (id === "tour") continue;
+    let box = sl.querySelector(":scope > .narr"); if (box) box.remove();
+    if (!n.pts) continue;
+    box = document.createElement("div"); box.className = "narr";
+    box.innerHTML = `<ul class="pts">${n.pts.map((q) => `<li>${q.s}${q.sub ? `<ul class="sub">${q.sub.map((x) => `<li>${x}</li>`).join("")}</ul>` : ""}</li>`).join("")}</ul>`;
+    (h || sl.firstElementChild).insertAdjacentElement("afterend", box);
+  }
+}
+
+// ---------------- visuals for text-heavy slides ----------------
+function miniNet(svg, c, opts = {}) { // thumbnail of a city network
+  const all = c.xy.concat(c.other.map((o) => o.xy)), xs2 = all.map((q) => q[0]), ys2 = all.map((q) => q[1]);
+  const x0 = Math.min(...xs2), x1 = Math.max(...xs2), y0 = Math.min(...ys2), y1 = Math.max(...ys2), S = 200, P = 8, sc = (S - 2 * P) / Math.max(x1 - x0, y1 - y0);
+  const pos = {}; c.nodes.forEach((n, i) => pos[n] = [P + (c.xy[i][0] - x0) * sc, S - P - (c.xy[i][1] - y0) * sc]); c.other.forEach((o) => pos[o.name] = [P + (o.xy[0] - x0) * sc, S - P - (o.xy[1] - y0) * sc]);
+  svg.setAttribute("viewBox", `0 0 ${S} ${S}`); svg.replaceChildren();
+  for (const [a, b] of c.links) { const p1 = pos[a], q = pos[b]; if (p1 && q) el("line", {x1: p1[0], y1: p1[1], x2: q[0], y2: q[1], stroke: "var(--pipe)", "stroke-width": c.nodes.length > 300 ? 0.6 : 1}, svg); }
+  (opts.sensors || []).forEach((n) => { const [x, y] = pos[n]; el("circle", {cx: x, cy: y, r: 3.5, fill: "var(--water)"}, svg); });
+}
+function fillTextVisuals() {
+  // problem slide: flow bar (Net3)
+  const fb = $("flowBar"); fb.replaceChildren(); const Q = D.system_demand_lps, X0 = 10, Wd = 540, sx2 = (v) => Wd * v / Q;
+  el("rect", {x: X0, y: 30, width: Wd, height: 30, fill: "var(--ink-2)"}, fb);
+  const swing = 0.01 * Q; el("rect", {x: X0 + Wd - sx2(swing), y: 26, width: sx2(swing), height: 38, fill: "var(--heat-1)", "fill-opacity": 0.55}, fb);
+  el("rect", {x: X0 + Wd - sx2(2), y: 22, width: Math.max(1.5, sx2(2)), height: 46, fill: "var(--leak)"}, fb);
+  const t = (x, y, txt, anchor, col) => { const e = el("text", {x, y, "text-anchor": anchor || "start", fill: col || "var(--paper)", "font-size": 13, "font-family": "IBM Plex Mono, monospace"}, fb); e.textContent = txt; };
+  t(X0, 18, `Net3 benchmark city: ${Math.round(Q)} L/s average flow`); t(X0 + Wd, 86, `normal demand swing ≈ 1 % = ${swing.toFixed(0)} L/s`, "end", "var(--heat-1)"); t(X0 + Wd, 106, "leak 2 L/s (173 m³ a day)", "end", "var(--leak)");
+  // answer/ledger: before vs after map
+  const ex = HY.examples[Math.min(1, HY.examples.length - 1)], leak = D.nodes.indexOf(ex.leak), uni = new Array(N).fill(1 / N);
+  $("llBA").innerHTML = `<div class="before"><h3>What existed: a district alarm</h3><svg id="baBefore"></svg><p>Leak detected somewhere in the network: the crew searches all ${N} junctions (${D.cities ? "" : ""}${Math.round(CITIES.find((c) => c.name === "Net3")?.topology.pipe_km || 66)} km of pipe).</p></div>
+    <div class="after"><h3>This work: sensors + hybrid locator</h3><svg id="baAfter"></svg><p>6 planned sensors (blue): an 80 % search area of ${ex.hybrid.region_k} junctions that contains the leak; the crew’s first stop is the exact junction.</p></div>`;
+  netSvg($("baBefore"), {p: uni, leak}); netSvg($("baAfter"), {p: ex.hybrid.p, leak, region: regionOf(ex.hybrid.p), pick: D.nodes.indexOf(ex.hybrid.pick), pickColor: "var(--water)"});
+  // method: four thumbnails of the pipeline on the same leak
+  const sig = signatureAt(leak, 6), cm = sig.reduce((a, b) => a + b, 0) / N, dev = sig.map((v) => Math.max(0, cm - v)), dmax = Math.max(...dev);
+  $("methodThumbs").innerHTML = `<figure><svg id="mt1"></svg><figcaption>1 · network model (Net3)</figcaption></figure><figure><svg id="mt2"></svg><figcaption>2 · simulated leak: pressure drop</figcaption></figure><figure><svg id="mt3" viewBox="0 0 220 160"></svg><figcaption>3 · what 6 sensors read</figcaption></figure><figure><svg id="mt4"></svg><figcaption>4 · hybrid: where to dig</figcaption></figure>`;
+  netSvg($("mt1"), {p: new Array(N).fill(0), leak}); netSvg($("mt2"), {p: dev.map((v) => v / dmax), leak}); netSvg($("mt4"), {p: ex.hybrid.p, leak, region: regionOf(ex.hybrid.p), pick: D.nodes.indexOf(ex.hybrid.pick), pickColor: "var(--water)"});
+  const m3 = $("mt3"), sv = sensors6.map((i) => cm - sig[i]), smax = Math.max(...sv.map(Math.abs), 1e-6);
+  sv.forEach((v, j) => { const h = 110 * Math.abs(v) / smax, x = 18 + j * 33; el("rect", {x, y: 130 - h, width: 22, height: h, rx: 2, fill: "var(--water)"}, m3); const tt = el("text", {x: x + 11, y: 148, "text-anchor": "middle", "font-size": 10, fill: "var(--ink-2)", "font-family": "IBM Plex Mono, monospace"}, m3); tt.textContent = "S" + (j + 1); });
+  // limits: cities tested vs field not yet
+  const ct = $("cityThumbs"); ct.innerHTML = CITIES.map((c, i) => `<figure><svg id="ct${i}"></svg><figcaption>✓ ${c.name} (simulated)</figcaption></figure>`).join("") + `<figure><svg viewBox="0 0 200 200"><rect x="6" y="6" width="188" height="188" fill="none" stroke="var(--ink-3)" stroke-dasharray="6 5"/><text x="100" y="106" text-anchor="middle" font-size="14" fill="var(--ink-3)" font-family="IBM Plex Mono, monospace">field network</text></svg><figcaption>✗ real utility data: next</figcaption></figure>`;
+  CITIES.forEach((c, i) => miniNet($("ct" + i), c, {sensors: c.greedy_order.slice(0, knee(c))}));
+  // company: narrowing (pipe length to search), log scale
+  const net3 = CITIES.find((c) => c.name === "Net3"), totalKm = net3 ? net3.topology.pipe_km : 65.7, areaKm = totalKm * hyb.region_size / N;
+  const steps = [["District alarm (detect)", totalKm * 1000, "var(--ink-3)"], ["LeakLocate 80 % search area", areaKm * 1000, "var(--water)"], ["Crew’s first stop: median distance to leak", hyb.median_err_m, "var(--water)"], ["Acoustic correlator (pinpoint)", 1, "var(--ink-3)"]];
+  const ns = $("narrowSvg"); ns.replaceChildren(); const L0 = 330, Wm = 520, lx = (v) => L0 + Wm * (Math.log10(v) - 0) / (Math.log10(1e5) - 0);
+  steps.forEach(([nm, v, col], i) => { const y = 8 + i * 35; const a = el("text", {x: L0 - 10, y: y + 18, "text-anchor": "end", "font-size": 13, fill: "var(--ink)", "font-family": "Public Sans, sans-serif"}, ns); a.textContent = nm;
+    el("rect", {x: L0, y, width: Math.max(3, lx(v) - L0), height: 24, rx: 3, fill: col}, ns); const b = el("text", {x: Math.max(L0 + 3, lx(v)) + 8, y: y + 17, "font-size": 12, fill: "var(--ink)", "font-family": "IBM Plex Mono, monospace"}, ns); b.textContent = fmtM(v) + " of pipe"; });
+  // build: timeline
+  const tl = $("timeline"); tl.replaceChildren(); const X = (m2) => 10 + 500 * m2 / 36;
+  [[0, 6, "prove"], [6, 18, "productize"], [18, 36, "scale"]].forEach(([a, b, nm], i) => { el("rect", {x: X(a), y: 10, width: X(b) - X(a) - 3, height: 26, rx: 3, fill: i === 0 ? "var(--water)" : "var(--ink-3)"}, tl);
+    const tt = el("text", {x: X(a) + 6, y: 28, fill: "#fff", "font-size": 12, "font-family": "IBM Plex Mono, monospace"}, tl); tt.textContent = nm; });
+  [0, 6, 18, 36].forEach((m2) => { const tt = el("text", {x: X(m2), y: 56, "text-anchor": "middle", fill: "var(--ink-2)", "font-size": 11, "font-family": "IBM Plex Mono, monospace"}, tl); tt.textContent = m2 + " mo"; });
+  // gaps: risk matrix (judgement)
+  const rs = $("riskSvg"); rs.replaceChildren(); const L1 = 50, T1 = 10, S1 = 250;
+  for (let i = 0; i <= 3; i++) { el("line", {x1: L1, x2: L1 + S1, y1: T1 + i * S1 / 3, y2: T1 + i * S1 / 3, stroke: "var(--rule)"}, rs); el("line", {x1: L1 + i * S1 / 3, x2: L1 + i * S1 / 3, y1: T1, y2: T1 + S1, stroke: "var(--rule)"}, rs); }
+  const ax1 = el("text", {x: L1 + S1 / 2, y: T1 + S1 + 26, "text-anchor": "middle", "font-size": 11, fill: "var(--ink-2)"}, rs); ax1.textContent = "likelihood →";
+  const ax2 = el("text", {x: 14, y: T1 + S1 / 2, "text-anchor": "middle", transform: `rotate(-90 14 ${T1 + S1 / 2})`, "font-size": 11, fill: "var(--ink-2)"}, rs); ax2.textContent = "impact →";
+  [["No field evidence", 0.85, 0.9], ["Stale hydraulic models", 0.8, 0.7], ["Data access", 0.6, 0.5], ["Slow procurement", 0.75, 0.45], ["Incumbents", 0.55, 0.6], ["Small leaks", 0.9, 0.35]].forEach(([nm, lx2, iy]) => {
+    const cx = L1 + lx2 * S1, cy = T1 + (1 - iy) * S1; el("circle", {cx, cy, r: 6, fill: "var(--water)"}, rs); const tt = el("text", {x: cx + (lx2 > 0.7 ? -9 : 9), y: cy + 4, "text-anchor": lx2 > 0.7 ? "end" : "start", "font-size": 11, fill: "var(--ink)"}, rs); tt.textContent = nm; });
+}
+
+
+function fillKpis() {
+  const net3 = CITIES.find((c) => c.name === "Net3"), k = 6, gOpt = net3 ? errAt(net3, k) : null, gRnd = net3 ? net3.random_curve[k] : null;
+  const items = [
+    {lab: "Distance from the crew’s first stop to the leak", oldL: "best constant guess", newL: "hybrid", o: constR.median_err_m, n: hyb.median_err_m, f: fmtM, better: "lower"},
+    {lab: "80 % search areas that really contain the leak", oldL: "forest alone", newL: "hybrid", o: hRf["coverage80_%"], n: hyb["coverage80_%"], f: (v) => Math.round(v) + " %", better: "target 80 %", max: 100},
+    {lab: "Junctions to search in the 80 % area", oldL: "physics model", newL: "hybrid", o: hPhys.region_size, n: hyb.region_size, f: (v) => v.toFixed(1), better: "lower"},
+    ...(gOpt ? [{lab: `Expected search distance with ${k} sensors (Net3)`, oldL: "random layout", newL: "planned layout", o: gRnd, n: gOpt, f: fmtM, better: "lower"}] : []),
+  ];
+  $("kpis").innerHTML = items.map((it) => { const mx = it.max || Math.max(it.o, it.n) * 1.05;
+    return `<div class="kpi"><span class="klab">${it.lab}</span><div class="karrow"><span class="old">${it.f(it.o)}</span><span class="arr">→</span><b class="new">${it.f(it.n)}</b></div>
+      <svg viewBox="0 0 240 34" class="kbar"><rect x="0" y="2" width="${240 * it.o / mx}" height="12" rx="2" fill="var(--ink-3)"/><rect x="0" y="19" width="${240 * it.n / mx}" height="12" rx="2" fill="var(--water)"/>${it.max ? `<line x1="${240 * 0.8}" x2="${240 * 0.8}" y1="0" y2="34" stroke="var(--ink)" stroke-dasharray="3 2"/>` : ""}</svg>
+      <span class="kfoot">${it.oldL} → ${it.newL} · ${it.better}</span></div>`; }).join("");
+}
+
+// ---------------- company: value calculator ----------------
+function calc() {
+  const v = (id) => +$(id).value, leaks = v("calcLeaks"), q = v("calcSize"), days = v("calcDays"), price = v("calcPrice"), dist = v("calcDist");
+  $("outLeaks").textContent = leaks; $("outSize").textContent = q.toFixed(1); $("outDays").textContent = days; $("outPrice").textContent = "$" + price.toFixed(2); $("outDist").textContent = dist;
+  const m3 = leaks * q * 86.4 * days, usd = m3 * price, fmt$ = (x) => x >= 1e6 ? "$" + (x / 1e6).toFixed(1) + " M" : x >= 1e3 ? "$" + Math.round(x / 1e3) + " k" : "$" + Math.round(x);
+  $("calcOut").innerHTML = `<div><b class="num">${Math.round(m3).toLocaleString()} m³</b><span>water saved per district per year</span></div><div><b class="num">${fmt$(usd)}</b><span>value per district per year</span></div><div><b class="num">${fmt$(usd * dist * 0.2)}</b><span>per utility per year if priced at 20 % of value</span></div>`;
+}
+["calcLeaks", "calcSize", "calcDays", "calcPrice", "calcDist"].forEach((id) => $(id).addEventListener("input", calc));
+let kDone = false;
+function runKCurve() {
+  if (kDone) return; kDone = true; const r = makeRng(4242), ns = 1, ks = [2, 3, 4, 5, 6, 8, 10, 12].filter((k) => k <= greedyIdx.length), res = [];
+  const trial = (sens) => { const leak = Math.floor(r() * N), q = Math.exp(Math.log(2) + r() * (Math.log(8) - Math.log(2))); const f = observe(leak, q, ns, NCOV + Math.floor(r() * (NOISE.length - NCOV)), r); return summarize(locate(f, sens, ns), leak).exp; };
+  for (const k of ks) { const g = greedyIdx.slice(0, k).sort((a, b) => a - b); let eg = 0; for (let t = 0; t < 120; t++) eg += trial(g); let er = 0; for (let q = 0; q < 5; q++) { const s = randomLayout(k, 100 + q); for (let t = 0; t < 40; t++) er += trial(s); } res.push({k, g: eg / 120, r: er / 200}); }
+  { const six = res.find((x) => x.k === 6) || res[0], two = res[0]; if ($("kFact")) $("kFact").innerHTML = `With 6 sensors: <b>${fmtM(six.g)}</b> expected distance optimized vs <b>${fmtM(six.r)}</b> random; with ${two.k}: ${fmtM(two.g)} vs ${fmtM(two.r)} (2–8 L/s leaks)`; }
+  linesChart($("chK"), res.map((x) => String(x.k)), [{name: "optimized", color: "var(--water)", values: res.map((x) => x.g), dy: 10}, {name: "random", color: "var(--ink-3)", values: res.map((x) => x.r), dy: -6}], "number of pressure sensors", fmtM);
+}
+
+// ---------------- boot ----------------
+$("k").max = String(greedyIdx.length);
+TOUR_LEAK = tourLeak(); { const far = nearNonSensors(TOUR_LEAK, N); TOUR_START_LEAK = far[Math.floor(far.length * 0.6)]; }
+resetInstrument(); fillReport(); fillEvidence(); fillNovelty(); calc(); setTitles(); fillCities(); narrate(); drawCity(); fillTextVisuals(); fillKpis();
+slides.forEach((s, i) => { const p = s.querySelector(".pno"); if (p) p.textContent = `${i + 1} / ${slides.length}`; });
+go(0);  // always open on the problem slide
+if (!wide()) runKCurve();
+if (false) setTimeout(() => { if (!tour.playing && !tour.done && tour.run === 0 && slides[cur].id === "tour") seek(0, true); }, 1400);
+</script>

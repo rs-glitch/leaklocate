@@ -1,0 +1,558 @@
+<title>LeakLocate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Public+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a utility engineer's instrument. Header states prior art vs contribution; then one large
+   network map beside a narrow control column; then measured performance; then method notes.
+   Color follows the APWA utility marking code: blue = potable water (our sensors on the water main),
+   pink = survey marking (the leak we place). Heat for inference is a separate warm ramp. */
+:root {
+  --paper: #f1f5f4; --surface: #fbfdfc; --ink: #13262b; --ink-2: #48605f; --ink-3: #7a8d8c; --rule: #cdd8d6;
+  --water: #0057b8; --water-soft: #d6e4f5; --leak: #c8175f;
+  --heat-0: #f3e3d0; --heat-1: #e9a76b; --heat-2: #c8641f; --heat-3: #8a3a0c;
+  --res-0: #dfe9ec; --res-3: #0b4f6c;
+  --pipe: #9fb1b0; --pump: #13262b;
+  --good: #1c7c4a; --bad: #b3261e;
+  --display: "Barlow Semi Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --body: "Public Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0d181a; --surface: #12211f; --ink: #e2ecea; --ink-2: #a3b6b4; --ink-3: #74898a; --rule: #263a3b;
+  --water: #5ea6f2; --water-soft: #16304d; --leak: #ff5c99;
+  --heat-0: #3a2a1f; --heat-1: #8f4f22; --heat-2: #e07a2e; --heat-3: #ffb27a;
+  --res-0: #1a2f36; --res-3: #8fd0ee; --pipe: #3f5658; --pump: #e2ecea; --good: #4cc488; --bad: #ff7b72; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --paper: #0d181a; --surface: #12211f; --ink: #e2ecea; --ink-2: #a3b6b4; --ink-3: #74898a; --rule: #263a3b;
+  --water: #5ea6f2; --water-soft: #16304d; --leak: #ff5c99;
+  --heat-0: #3a2a1f; --heat-1: #8f4f22; --heat-2: #e07a2e; --heat-3: #ffb27a;
+  --res-0: #1a2f36; --res-3: #8fd0ee; --pipe: #3f5658; --pump: #e2ecea; --good: #4cc488; --bad: #ff7b72; color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--body); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-inline: max(16px, 3vw); padding-block: 28px 64px; display: grid; gap: 40px }
+h1, h2, h3 { font-family: var(--display); line-height: 1.1; text-wrap: balance; margin: 0 }
+h1 { font-size: clamp(2.4rem, 5vw, 3.6rem); font-weight: 700; letter-spacing: .005em }
+h2 { font-size: 1.7rem; font-weight: 600 }
+h3 { font-size: 1.12rem; font-weight: 600; letter-spacing: .02em }
+p { margin: 0; max-width: 68ch }
+.eyebrow { font: 500 .75rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); display: flex; gap: 10px; flex-wrap: wrap; align-items: center }
+.chip { border: 1px solid var(--rule); border-radius: 3px; padding: 4px 7px; }
+.chip.stage { border-color: var(--water); color: var(--water) }
+.lede { font-size: 1.12rem; color: var(--ink-2); max-width: 70ch }
+.mono, .num { font-family: var(--mono); font-variant-numeric: tabular-nums }
+a { color: var(--water) }
+
+/* Prior art vs contribution */
+.ledger { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid var(--ink); border-bottom: 1px solid var(--rule) }
+.ledger > section { padding: 18px 22px 20px 0; display: grid; gap: 10px; align-content: start; min-width: 0 }
+.ledger > section + section { padding-left: 22px; border-left: 1px solid var(--rule) }
+.ledger h3 { font-family: var(--mono); font-size: .76rem; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2) }
+.ledger section.adds h3 { color: var(--water) }
+.ledger ul { margin: 0; padding-left: 1.1em; display: grid; gap: 7px }
+.ledger li { max-width: 62ch }
+.ledger li b { font-weight: 600 }
+.ledger .next { color: var(--ink-2); font-size: .92rem; border-top: 1px dashed var(--rule); padding-top: 10px }
+@media (max-width: 760px) { .ledger { grid-template-columns: 1fr } .ledger > section + section { border-left: 0; border-top: 1px solid var(--rule); padding-left: 0 } }
+
+/* Instrument */
+.instrument { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 22px; align-items: start }
+@media (max-width: 980px) { .instrument { grid-template-columns: 1fr } }
+.mapcard { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; display: grid; min-width: 0 }
+.maptools { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--rule) }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 4px; overflow: hidden }
+.seg button { font: 500 .82rem var(--body); background: transparent; color: var(--ink-2); border: 0; padding: 7px 11px; cursor: pointer }
+.seg button + button { border-left: 1px solid var(--rule) }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper) }
+.seg button:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--water); outline-offset: 2px }
+svg#map { width: 100%; height: auto; display: block; touch-action: manipulation }
+#map .pipe { stroke: var(--pipe); stroke-width: 1.4; fill: none }
+#map .pump { stroke: var(--pump); stroke-width: 2.4; stroke-dasharray: 3 3 }
+#map .valve { stroke: var(--pump); stroke-width: 2 }
+#map .node { cursor: pointer }
+#map .node circle.base { fill: var(--surface); stroke: var(--ink-3); stroke-width: 1 }
+#map .node:hover circle.base { stroke: var(--ink); stroke-width: 2 }
+#map .tank, #map .res { fill: var(--surface); stroke: var(--ink); stroke-width: 1.6 }
+#map .sensor { fill: var(--water); stroke: var(--surface); stroke-width: 1.5 }
+#map .region { fill: none; stroke: var(--heat-2); stroke-width: 1.5; stroke-dasharray: 2 2 }
+#map .leakmark { stroke: var(--leak); stroke-width: 3; fill: none }
+#map .label { font: 500 11px var(--mono); fill: var(--ink-2) }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 10px 14px 12px; border-top: 1px solid var(--rule); font-size: .82rem; color: var(--ink-2) }
+.legend span { display: inline-flex; align-items: center; gap: 6px }
+.legend svg { flex: none }
+.ramp { width: 70px; height: 9px; border-radius: 2px }
+
+.panel { display: grid; gap: 18px; min-width: 0 }
+.control { display: grid; gap: 6px }
+.control label, .control .lbl { font-weight: 600; font-size: .9rem; display: flex; justify-content: space-between; gap: 8px }
+.control output { font-family: var(--mono); font-weight: 500; color: var(--ink) }
+.control .hint { font-size: .8rem; color: var(--ink-3) }
+input[type=range] { width: 100%; accent-color: var(--water) }
+select { font: inherit; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink) }
+.btn { font: 600 .9rem var(--body); padding: 9px 12px; border-radius: 4px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); cursor: pointer }
+.btn.ghost { background: transparent; color: var(--ink) }
+.btnrow { display: flex; gap: 8px; flex-wrap: wrap }
+
+.readout { border-top: 2px solid var(--ink); display: grid }
+.readout .row { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--rule); align-items: baseline }
+.readout .row span:first-child { color: var(--ink-2); font-size: .88rem }
+.readout .big { font: 600 1.6rem/1 var(--display) }
+.pill { font: 600 .75rem var(--mono); padding: 3px 7px; border-radius: 3px; letter-spacing: .04em }
+.pill.ok { color: var(--good); border: 1px solid currentColor }
+.pill.miss { color: var(--bad); border: 1px solid currentColor }
+
+/* Evidence */
+.evidence { display: grid; gap: 18px }
+.evhead { display: flex; justify-content: space-between; gap: 16px; align-items: end; flex-wrap: wrap }
+.charts { display: grid; grid-template-columns: 1fr 1fr; gap: 22px }
+@media (max-width: 860px) { .charts { grid-template-columns: 1fr } }
+.chart { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 14px 14px 10px; display: grid; gap: 8px; min-width: 0 }
+.chart p.cap { font-size: .86rem; color: var(--ink-2) }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible }
+.chart .axis { stroke: var(--rule) } .chart .grid { stroke: var(--rule); stroke-dasharray: 2 3 }
+.chart text { font: 11px var(--mono); fill: var(--ink-2) }
+.chart .ttl { fill: var(--ink); font-weight: 500 }
+.stats { display: flex; flex-wrap: wrap; gap: 10px 28px }
+.stat { display: grid; gap: 2px } .stat b { font: 600 1.5rem/1 var(--display) } .stat span { font-size: .8rem; color: var(--ink-2) }
+details { font-size: .88rem } details summary { cursor: pointer; color: var(--ink-2) }
+table { border-collapse: collapse; font: .82rem var(--mono); margin-top: 8px } td, th { padding: 4px 10px 4px 0; text-align: right; border-bottom: 1px solid var(--rule) } th { color: var(--ink-2); font-weight: 500 }
+.tablewrap { overflow-x: auto }
+.tip { position: fixed; pointer-events: none; background: var(--ink); color: var(--paper); font: .78rem/1.35 var(--mono); padding: 6px 8px; border-radius: 3px; z-index: 5; max-width: 260px }
+
+.notes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; border-top: 2px solid var(--ink); padding-top: 18px }
+.notes section { display: grid; gap: 8px; align-content: start } .notes p, .notes li { font-size: .92rem; color: var(--ink-2) }
+.notes ul { margin: 0; padding-left: 1.1em; display: grid; gap: 6px }
+@media (max-width: 860px) { .notes { grid-template-columns: 1fr } }
+footer { font-size: .82rem; color: var(--ink-3); border-top: 1px solid var(--rule); padding-top: 14px }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important } }
+</style>
+
+<div class="wrap">
+  <header style="display:grid;gap:14px">
+    <div class="eyebrow"><span>LeakLocate</span><span class="chip stage">v0.1 · baseline stage</span><span class="chip">EPANET Net3 benchmark</span><span class="chip">all simulation, no field data yet</span></div>
+    <h1>Where is the leak, and how many sensors do we need to know?</h1>
+    <p class="lede">Click any junction to put a leak there, choose how many pressure sensors the utility installs, and watch a probabilistic locator narrow the search. Every pressure value comes from EPANET hydraulic simulations of the Net3 benchmark network; the locator runs live in your browser.</p>
+  </header>
+
+  <div class="ledger" aria-label="Prior work and this work">
+    <section>
+      <h3>What existed</h3>
+      <ul>
+        <li><b>Hydraulic simulators</b>: EPANET, its Python wrapper WNTR, and EPyT-Flow, which generates leak scenarios on 16 networks and ships 7 detection benchmarks.</li>
+        <li><b>Leak detection is largely solved in simulation</b>: in the BattLeDIM 2020 competition (18 teams, L-Town network) detection accuracy above 95 % was common.</li>
+        <li><b>Localization models</b>: published graph-neural-network locators with open code, and sensor-placement methods based on information theory and value of information.</li>
+        <li>What these leave open for a utility: a direct answer to “with N sensors, how much pipe do we still have to search, and how sure is that?”</li>
+      </ul>
+    </section>
+    <section class="adds">
+      <h3>What this work adds</h3>
+      <ul>
+        <li><b>A decision view</b>: sensor count and placement turned into metres of pipe to search, with the search region drawn on the map and its coverage measured.</li>
+        <li><b>A diagnosed noise model</b>: pump switching caused 10–30 m false residuals in 58 of 205 leak-free runs; giving the model the SCADA pump schedule removes them. Removing the network-wide common mode cuts demand noise from 0.082 m to 0.018 m (4.5×).</li>
+        <li><b>A probabilistic locator with honest checks</b>: Bayesian matching with an empirical noise covariance; noise samples for covariance and for test draws are kept separate; the 80 % search region’s coverage is measured below, not assumed.</li>
+        <li><b>Greedy sensor placement</b> optimized for the same objective the utility cares about: expected pipe distance to the leak.</li>
+        <li><b>Verified shortcut</b>: leak response plus demand noise superpose within 0.038 m (median, about 8 % of the leak signal), which is what lets this page answer what-if questions in milliseconds.</li>
+      </ul>
+      <p class="next">Not done yet: a graph-neural-network locator benchmarked against this baseline, robustness to wrong pipe roughness, and the 782-junction L-Town network.</p>
+    </section>
+  </div>
+
+  <div class="instrument">
+    <div class="mapcard">
+      <div class="maptools">
+        <div class="seg" role="group" aria-label="Map layer">
+          <button id="layerInfer" aria-pressed="true">What the locator infers</button>
+          <button id="layerPhys" aria-pressed="false">What the network feels</button>
+        </div>
+        <div class="seg" role="group" aria-label="Clicking a junction">
+          <button id="clickLeak" aria-pressed="true">Click places leak</button>
+          <button id="clickSensor" aria-pressed="false">Click toggles sensor</button>
+        </div>
+      </div>
+      <svg id="map" role="img" aria-label="Net3 water network map with leak, sensors and locator result"></svg>
+      <div class="legend" id="legend"></div>
+    </div>
+
+    <aside class="panel" aria-label="Controls and result">
+      <div class="control">
+        <label for="size">Leak size <output id="sizeOut"></output></label>
+        <input id="size" type="range" min="0" max="100" value="55">
+        <span class="hint" id="sizeHint"></span>
+      </div>
+      <div class="control">
+        <label for="k">Pressure sensors <output id="kOut"></output></label>
+        <input id="k" type="range" min="2" max="12" value="6">
+        <div class="control" style="gap:4px"><span class="lbl" style="font-weight:500">Placement</span>
+          <select id="placement" aria-label="Sensor placement">
+            <option value="greedy">Optimized (greedy, this work)</option>
+            <option value="random">Random</option>
+            <option value="manual">Manual (click junctions)</option>
+          </select></div>
+      </div>
+      <div class="control">
+        <label for="noise">Demand noise per junction-hour <output id="noiseOut"></output></label>
+        <input id="noise" type="range" min="0" max="10" value="5" step="1">
+        <span class="hint">Pressure sensors add 0.05 m noise per hourly reading. Readings are averaged over 24 h.</span>
+      </div>
+      <div class="btnrow">
+        <button class="btn" id="redraw">New reading</button>
+        <button class="btn ghost" id="randomLeak">Random leak</button>
+      </div>
+      <div class="readout" aria-live="polite">
+        <div class="row"><span>Locator’s best guess is off by</span><span class="big num" id="rErr"></span></div>
+        <div class="row"><span>Expected error over the posterior</span><span class="num" id="rExp"></span></div>
+        <div class="row"><span>80 % search region</span><span class="num" id="rReg"></span></div>
+        <div class="row"><span>True leak inside region?</span><span id="rIn"></span></div>
+        <div class="row"><span>Largest drop at a sensor vs network average</span><span class="num" id="rDrop"></span></div>
+      </div>
+    </aside>
+  </div>
+
+  <section class="evidence" aria-labelledby="evh">
+    <div class="evhead">
+      <div style="display:grid;gap:6px"><h2 id="evh">Measured on 400 random leaks</h2>
+        <p style="color:var(--ink-2)">Recomputed in your browser for the sensors and noise currently selected. Leak sizes are drawn log-uniformly from 0.5 to 16 L/s, about 0.07–2.3 % of system demand.</p></div>
+      <button class="btn ghost" id="rerun">Re-run</button>
+    </div>
+    <div class="stats" id="stats"></div>
+    <div class="charts">
+      <figure class="chart" style="margin:0">
+        <h3>Error shrinks with leak size</h3>
+        <svg id="chartSize" viewBox="0 0 520 260" role="img" aria-label="Median pipe-distance error by leak size"></svg>
+        <p class="cap">Median distance along pipes from the locator’s best guess to the true leak. Dashed line: the error of a random guess.</p>
+        <details><summary>Table</summary><div class="tablewrap"><table id="tblSize"></table></div></details>
+      </figure>
+      <figure class="chart" style="margin:0">
+        <h3>Where sensors go matters as much as how many</h3>
+        <svg id="chartK" viewBox="0 0 520 260" role="img" aria-label="Expected error vs number of sensors, optimized vs random placement"></svg>
+        <p class="cap">Expected error for 2–8 L/s leaks. Random placement is the mean of 5 random layouts.</p>
+        <details><summary>Table</summary><div class="tablewrap"><table id="tblK"></table></div></details>
+      </figure>
+    </div>
+  </section>
+
+  <div class="notes">
+    <section><h3>How it works</h3>
+      <ul>
+        <li>Leak = an EPANET emitter, Q = C·√p, sized at 30 m pressure. Hydraulics are pressure-driven and use the nominal pump schedule, as a utility’s SCADA would supply.</li>
+        <li>Observation = mean 24 h pressure minus the utility’s leak-free model, at the sensors.</li>
+        <li>Locator: for every junction and 11 leak sizes, compare the common-mode-free residual with the simulated signature under the empirical noise covariance; sum over sizes; normalize.</li>
+      </ul></section>
+    <section><h3>What limits it</h3>
+      <ul>
+        <li>Simulation only. Real networks add model error (roughness, demands, valve states) that is not modelled yet.</li>
+        <li>Net3 has 92 junctions and serves about <span class="num" id="sysQ"></span> L/s, so a 2 L/s leak is under 0.3 % of flow, and small leaks stay near the noise floor.</li>
+        <li>The demand-noise slider scales stored noise samples linearly; the stored samples are 5 %.</li>
+      </ul></section>
+    <section><h3>Numbers behind this page</h3>
+      <ul>
+        <li><span class="num" id="nSims"></span> EPANET runs: <span class="num">92</span> leak junctions × 6 sizes, 400 noise-only runs, 120 superposition checks.</li>
+        <li>Superposition error: median <span class="num" id="supMed"></span> m, 95th percentile <span class="num" id="supP95"></span> m.</li>
+        <li>Average pipe distance between two random junctions: <span class="num" id="dRand"></span> km.</li>
+      </ul></section>
+  </div>
+  <footer>LeakLocate is part of “Infrastructure health on a shoestring”, a set of open demos of low-cost AI for civil infrastructure. Code: Python (WNTR 1.5, EPANET 2.2); this page is generated by <span class="mono">scripts/build_demo.py</span>. Source repository: release pending.</footer>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+const N = D.nodes.length, SIG = D.signature, NOISE = D.noise, DIST = D.dist_m;
+const SZ = D.sizes_lps, NREF = D.demand_sigma;
+const SENSOR_VAR = (0.05 * 0.05) / D.hours; // hourly sensor noise averaged over the window
+const NCOV = Math.floor(NOISE.length * 0.75); // noise samples used for covariance; the rest are test draws
+const GRID = Array.from({length: 11}, (_, i) => Math.exp(Math.log(SZ[0]) + i * (Math.log(SZ[SZ.length - 1]) - Math.log(SZ[0])) / 10));
+const $ = (id) => document.getElementById(id);
+const fmtM = (m) => m >= 1000 ? (m / 1000).toFixed(m >= 10000 ? 0 : 1) + " km" : Math.round(m) + " m";
+
+// ---------- random ----------
+let seed = 12345;
+const rnd = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return ((seed >>> 0) % 1e9) / 1e9; };
+const gauss = () => Math.sqrt(-2 * Math.log(rnd() + 1e-12)) * Math.cos(2 * Math.PI * rnd());
+
+// ---------- physics lookup ----------
+function signatureAt(leak, q) { // log-linear interpolation between simulated sizes, full field [N]
+  const lq = Math.log(q); let j = 0;
+  while (j < SZ.length - 2 && Math.log(SZ[j + 1]) < lq) j++;
+  const t = Math.min(1, Math.max(0, (lq - Math.log(SZ[j])) / (Math.log(SZ[j + 1]) - Math.log(SZ[j]))));
+  const a = SIG[leak][j], b = SIG[leak][j + 1];
+  return a.map((v, i) => v + t * (b[i] - v));
+}
+function observe(leak, q, noiseScale, sampleIdx) { // full field incl. demand + sensor noise
+  const s = signatureAt(leak, q), n = NOISE[sampleIdx];
+  return s.map((v, i) => v + noiseScale * n[i] + Math.sqrt(SENSOR_VAR) * gauss());
+}
+
+// ---------- locator ----------
+const cache = new Map();
+function model(sensors, noiseScale) {
+  const key = sensors.join(",") + "|" + noiseScale;
+  if (cache.has(key)) return cache.get(key);
+  const k = sensors.length;
+  // covariance of common-mode-free noise at sensors
+  const C = Array.from({length: k}, () => new Float64Array(k));
+  const mean = new Float64Array(k);
+  const rows = [];
+  for (let s = 0; s < NCOV; s++) {
+    const v = sensors.map((i) => noiseScale * NOISE[s][i]); const m = v.reduce((a, b) => a + b, 0) / k;
+    const c = v.map((x) => x - m); rows.push(c); c.forEach((x, i) => mean[i] += x / NCOV);
+  }
+  for (const c of rows) for (let i = 0; i < k; i++) for (let j = 0; j <= i; j++) C[i][j] += (c[i] - mean[i]) * (c[j] - mean[j]) / (NCOV - 1);
+  for (let i = 0; i < k; i++) { C[i][i] += SENSOR_VAR + 1e-6; for (let j = 0; j < i; j++) C[j][i] = C[i][j]; }
+  // Cholesky C = L L^T, whitening W = L^-1 (lower triangular)
+  const L = Array.from({length: k}, () => new Float64Array(k));
+  for (let i = 0; i < k; i++) for (let j = 0; j <= i; j++) {
+    let s = C[i][j]; for (let p = 0; p < j; p++) s -= L[i][p] * L[j][p];
+    L[i][j] = i === j ? Math.sqrt(Math.max(s, 1e-12)) : s / L[j][j];
+  }
+  const whiten = (v) => { const out = new Float64Array(k); for (let i = 0; i < k; i++) { let s = v[i]; for (let p = 0; p < i; p++) s -= L[i][p] * out[p]; out[i] = s / L[i][i]; } return out; };
+  const center = (v) => { const m = v.reduce((a, b) => a + b, 0) / v.length; return v.map((x) => x - m); };
+  const templ = []; // [node][grid] whitened centered signatures
+  for (let c = 0; c < N; c++) { templ.push(GRID.map((q) => { const f = signatureAt(c, q); return whiten(center(sensors.map((i) => f[i]))); })); }
+  const M = {whiten, center, templ};
+  cache.set(key, M); if (cache.size > 40) cache.delete(cache.keys().next().value);
+  return M;
+}
+function locate(field, sensors, noiseScale) {
+  const M = model(sensors, noiseScale);
+  const y = M.whiten(M.center(sensors.map((i) => field[i])));
+  const ll = new Float64Array(N * GRID.length); let mx = -Infinity;
+  for (let c = 0; c < N; c++) for (let g = 0; g < GRID.length; g++) {
+    const t = M.templ[c][g]; let s = 0; for (let i = 0; i < y.length; i++) { const d = y[i] - t[i]; s += d * d; }
+    const v = -0.5 * s; ll[c * GRID.length + g] = v; if (v > mx) mx = v;
+  }
+  const p = new Float64Array(N); let z = 0;
+  for (let c = 0; c < N; c++) { let s = 0; for (let g = 0; g < GRID.length; g++) s += Math.exp(ll[c * GRID.length + g] - mx); p[c] = s; z += s; }
+  for (let c = 0; c < N; c++) p[c] /= z;
+  return p;
+}
+function summarize(p, leak) {
+  let best = 0; for (let c = 1; c < N; c++) if (p[c] > p[best]) best = c;
+  const order = Array.from(p.keys()).sort((a, b) => p[b] - p[a]);
+  const region = []; let acc = 0; for (const c of order) { region.push(c); acc += p[c]; if (acc >= 0.8) break; }
+  let exp = 0; for (let c = 0; c < N; c++) exp += p[c] * DIST[leak][c];
+  return {best, err: DIST[leak][best], exp, region, inRegion: region.includes(leak)};
+}
+
+// ---------- sensors ----------
+const greedyIdx = D.greedy_order.map((n) => D.nodes.indexOf(n));
+function randomLayout(k, s) { const old = seed; seed = s; const idx = Array.from({length: N}, (_, i) => i); for (let i = N - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [idx[i], idx[j]] = [idx[j], idx[i]]; } seed = old; return idx.slice(0, k).sort((a, b) => a - b); }
+
+// ---------- state ----------
+const st = { leak: D.nodes.indexOf("123") >= 0 ? D.nodes.indexOf("123") : 40, sizeT: 55, k: 6, placement: "greedy", manual: [], noisePct: 5,
+  layer: "infer", click: "leak", sample: NCOV, field: null, post: null };
+const sizeFromT = (t) => Math.exp(Math.log(0.5) + (t / 100) * (Math.log(16) - Math.log(0.5)));
+function sensors() {
+  if (st.placement === "greedy") return greedyIdx.slice(0, st.k).sort((a, b) => a - b);
+  if (st.placement === "random") return randomLayout(st.k, 777);
+  return st.manual.slice().sort((a, b) => a - b);
+}
+
+// ---------- map ----------
+const svgNS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs, parent) => { const e = document.createElementNS(svgNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const allXY = D.xy.concat(D.other_nodes.map((o) => o.xy));
+const xs = allXY.map((p) => p[0]), ys = allXY.map((p) => p[1]);
+const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+const W = 760, PAD = 26, H = Math.round((W - 2 * PAD) * (maxY - minY) / (maxX - minX) + 2 * PAD);
+const sx = (x) => PAD + (x - minX) / (maxX - minX) * (W - 2 * PAD);
+const sy = (y) => H - PAD - (y - minY) / (maxY - minY) * (H - 2 * PAD);
+const posOf = {}; D.nodes.forEach((n, i) => posOf[n] = [sx(D.xy[i][0]), sy(D.xy[i][1])]); D.other_nodes.forEach((o) => posOf[o.name] = [sx(o.xy[0]), sy(o.xy[1])]);
+const map = $("map"); map.setAttribute("viewBox", `0 0 ${W} ${H}`);
+const gLinks = el("g", {}, map), gHalo = el("g", {}, map), gNodes = el("g", {}, map), gTop = el("g", {}, map);
+for (const l of D.links) { const a = posOf[l.a], b = posOf[l.b]; if (!a || !b) continue;
+  el("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: l.type === "Pump" ? "pump" : l.type === "Valve" ? "valve" : "pipe"}, gLinks); }
+for (const o of D.other_nodes) { const [x, y] = posOf[o.name];
+  if (o.type === "Tank") el("rect", {x: x - 7, y: y - 6, width: 14, height: 12, class: "tank"}, gTop);
+  else el("path", {d: `M${x - 8},${y - 6} L${x + 8},${y - 6} L${x + 5},${y + 6} L${x - 5},${y + 6} Z`, class: "res"}, gTop); }
+const nodeEls = D.nodes.map((n, i) => { const g = el("g", {class: "node", tabindex: "-1"}, gNodes); const [x, y] = posOf[n];
+  el("circle", {cx: x, cy: y, r: 10, fill: "transparent"}, g); const c = el("circle", {cx: x, cy: y, r: 3.2, class: "base"}, g);
+  g.addEventListener("click", () => onNodeClick(i)); g.addEventListener("mousemove", (e) => showTip(e, i)); g.addEventListener("mouseleave", hideTip); return c; });
+
+function heat(t) { // 0..1 -> warm ramp via CSS vars
+  const css = getComputedStyle(document.documentElement);
+  const stops = ["--heat-0", "--heat-1", "--heat-2", "--heat-3"].map((v) => css.getPropertyValue(v).trim());
+  return stops[Math.min(3, Math.floor(t * 3.999))];
+}
+function resColor(t) { const css = getComputedStyle(document.documentElement); return t > 0.5 ? css.getPropertyValue("--res-3").trim() : css.getPropertyValue("--res-0").trim(); }
+
+function drawMap() {
+  gHalo.replaceChildren();
+  const sens = sensors(), sset = new Set(sens);
+  if (st.layer === "infer") {
+    const pmax = Math.max(...st.post);
+    D.nodes.forEach((n, i) => { const p = st.post[i]; if (p < 0.002) return; const [x, y] = posOf[n];
+      el("circle", {cx: x, cy: y, r: 4 + 22 * Math.sqrt(p / pmax), fill: heat(p / pmax), "fill-opacity": 0.8}, gHalo); });
+    const R = summarize(st.post, st.leak);
+    for (const c of R.region) { const [x, y] = posOf[D.nodes[c]]; el("circle", {cx: x, cy: y, r: 7.5, class: "region"}, gHalo); }
+  } else {
+    const cm = st.field.reduce((a, b) => a + b, 0) / N; const dev = st.field.map((v) => v - cm);
+    const mx = Math.max(...dev.map((v) => Math.abs(v)), 1e-6);
+    D.nodes.forEach((n, i) => { const t = Math.abs(dev[i]) / mx; if (dev[i] >= 0 || t < 0.04) return; const [x, y] = posOf[n];
+      el("circle", {cx: x, cy: y, r: 3 + 16 * Math.sqrt(t), fill: resColor(1), "fill-opacity": 0.25 + 0.6 * t}, gHalo); });
+  }
+  nodeEls.forEach((c, i) => c.setAttribute("r", sset.has(i) ? 0 : 3.2));
+  for (const s of sens) { const [x, y] = posOf[D.nodes[s]]; el("path", {d: `M${x},${y - 7} L${x + 7},${y} L${x},${y + 7} L${x - 7},${y} Z`, class: "sensor"}, gHalo); }
+  const [lx, ly] = posOf[D.nodes[st.leak]];
+  el("circle", {cx: lx, cy: ly, r: 11, class: "leakmark"}, gHalo);
+  el("path", {d: `M${lx - 16},${ly} H${lx - 6} M${lx + 6},${ly} H${lx + 16} M${lx},${ly - 16} V${ly - 6} M${lx},${ly + 6} V${ly + 16}`, class: "leakmark"}, gHalo);
+  const t = el("text", {x: lx + 14, y: ly - 12, class: "label"}, gHalo); t.textContent = "leak · node " + D.nodes[st.leak];
+}
+function legend() {
+  const inf = st.layer === "infer";
+  $("legend").innerHTML =
+    `<span><svg width="14" height="14"><path d="M7,1 L13,7 L7,13 L1,7 Z" fill="var(--water)"/></svg>Pressure sensor</span>` +
+    `<span><svg width="18" height="18"><circle cx="9" cy="9" r="6" fill="none" stroke="var(--leak)" stroke-width="2.5"/></svg>True leak (you placed it)</span>` +
+    (inf ? `<span><span class="ramp" style="background:linear-gradient(90deg,var(--heat-0),var(--heat-1),var(--heat-2),var(--heat-3))"></span>Locator probability, low → high</span>` +
+           `<span><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="var(--heat-2)" stroke-dasharray="2 2" stroke-width="1.5"/></svg>80 % search region</span>`
+         : `<span><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="var(--res-3)" fill-opacity=".6"/></svg>Pressure drop vs network average (larger = bigger drop)</span>`) +
+    `<span><svg width="16" height="14"><rect x="1" y="1" width="14" height="12" fill="none" stroke="var(--ink)" stroke-width="1.5"/></svg>Tank</span>` +
+    `<span><svg width="18" height="14"><path d="M1,1 L17,1 L14,13 L4,13 Z" fill="none" stroke="var(--ink)" stroke-width="1.5"/></svg>Reservoir</span>` +
+    `<span><svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke="var(--pump)" stroke-width="2.4" stroke-dasharray="3 3"/></svg>Pump</span>`;
+}
+
+// ---------- tooltip ----------
+const tip = $("tip");
+function showTip(e, i) {
+  const sens = new Set(sensors());
+  tip.innerHTML = `Junction ${D.nodes[i]}${sens.has(i) ? " · sensor" : ""}<br>locator probability ${(100 * st.post[i]).toFixed(1)} %<br>pipe distance to leak ${fmtM(DIST[st.leak][i])}`;
+  tip.hidden = false; tip.style.left = Math.min(e.clientX + 14, innerWidth - 270) + "px"; tip.style.top = (e.clientY + 14) + "px";
+}
+function hideTip() { tip.hidden = true; }
+
+// ---------- interaction ----------
+function compute(newSample) {
+  if (newSample) st.sample = NCOV + Math.floor(rnd() * (NOISE.length - NCOV));
+  const q = sizeFromT(st.sizeT), ns = st.noisePct / (100 * NREF);
+  st.field = observe(st.leak, q, ns, st.sample);
+  const sens = sensors();
+  if (sens.length < 2) { st.post = new Float64Array(N).fill(1 / N); } else st.post = locate(st.field, sens, ns);
+}
+function render() {
+  const q = sizeFromT(st.sizeT);
+  $("sizeOut").textContent = q.toFixed(q < 2 ? 1 : 0) + " L/s";
+  $("sizeHint").textContent = `${(100 * q / D.system_demand_lps).toFixed(2)} % of system demand · about ${(q * 86.4).toFixed(0)} m³ lost per day`;
+  const sens = sensors();
+  $("kOut").textContent = st.placement === "manual" ? sens.length + " (manual)" : st.k;
+  $("noiseOut").textContent = st.noisePct + " %";
+  const R = summarize(st.post, st.leak);
+  $("rErr").textContent = sens.length < 2 ? "—" : fmtM(R.err);
+  $("rExp").textContent = sens.length < 2 ? "needs 2+ sensors" : fmtM(R.exp);
+  $("rReg").textContent = R.region.length + " of " + N + " junctions";
+  $("rIn").innerHTML = R.inRegion ? `<span class="pill ok">YES</span>` : `<span class="pill miss">NO</span>`;
+  const drop = Math.min(...sens.map((i) => st.field[i] - st.field.reduce((a, b) => a + b, 0) / N));
+  $("rDrop").textContent = sens.length ? Math.max(0, -drop * 100).toFixed(1) + " cm" : "—";
+  drawMap(); legend();
+}
+function update(newSample) { compute(newSample); render(); }
+function onNodeClick(i) {
+  if (st.click === "leak") st.leak = i;
+  else { if (st.placement !== "manual") { st.manual = sensors(); st.placement = "manual"; $("placement").value = "manual"; } const j = st.manual.indexOf(i); if (j >= 0) st.manual.splice(j, 1); else st.manual.push(i); }
+  update(true);
+}
+function seg(onId, offId, fn) { $(onId).addEventListener("click", () => { $(onId).setAttribute("aria-pressed", "true"); $(offId).setAttribute("aria-pressed", "false"); fn(); }); }
+seg("layerInfer", "layerPhys", () => { st.layer = "infer"; render(); });
+seg("layerPhys", "layerInfer", () => { st.layer = "phys"; render(); });
+seg("clickLeak", "clickSensor", () => { st.click = "leak"; });
+seg("clickSensor", "clickLeak", () => { st.click = "sensor"; });
+$("size").addEventListener("input", (e) => { st.sizeT = +e.target.value; update(false); });
+$("k").addEventListener("input", (e) => { st.k = +e.target.value; if (st.placement === "manual") { st.placement = "greedy"; $("placement").value = "greedy"; } update(false); scheduleEvidence(); });
+$("placement").addEventListener("change", (e) => { st.placement = e.target.value; if (st.placement === "manual" && !st.manual.length) st.manual = greedyIdx.slice(0, st.k); update(false); scheduleEvidence(); });
+$("noise").addEventListener("input", (e) => { st.noisePct = +e.target.value; update(false); scheduleEvidence(); });
+$("redraw").addEventListener("click", () => update(true));
+$("randomLeak").addEventListener("click", () => { st.leak = Math.floor(rnd() * N); update(true); });
+$("rerun").addEventListener("click", () => runEvidence(true));
+
+// ---------- evidence (Monte Carlo) ----------
+const BINS = [[0.5, 1], [1, 2], [2, 4], [4, 8], [8, 16.01]];
+let meanRand = 0, cnt = 0; for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) if (DIST[i][j] >= 0) { meanRand += DIST[i][j]; cnt++; } meanRand /= cnt;
+function trial(sens, ns, lo, hi) {
+  const leak = Math.floor(rnd() * N), q = Math.exp(Math.log(lo) + rnd() * (Math.log(hi) - Math.log(lo)));
+  const f = observe(leak, q, ns, NCOV + Math.floor(rnd() * (NOISE.length - NCOV)));
+  return {q, ...summarize(locate(f, sens, ns), leak)};
+}
+const median = (a) => { const s = a.slice().sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : NaN; };
+let evTimer = null;
+function scheduleEvidence() { clearTimeout(evTimer); evTimer = setTimeout(() => runEvidence(false), 350); }
+function runEvidence(reseed) {
+  if (reseed) seed = (Date.now() % 100000) + 1;
+  const sens = sensors(), ns = st.noisePct / (100 * NREF);
+  if (sens.length < 2) { $("stats").innerHTML = `<div class="stat"><b>—</b><span>place at least 2 sensors</span></div>`; return; }
+  const res = []; for (let t = 0; t < 400; t++) res.push(trial(sens, ns, 0.5, 16));
+  const cover = res.filter((r) => r.inRegion).length / res.length;
+  const regionAvg = res.reduce((a, r) => a + r.region.length, 0) / res.length;
+  $("stats").innerHTML =
+    stat(fmtM(median(res.map((r) => r.err))), "median error, best guess") +
+    stat(fmtM(meanRand), "random guess, mean") +
+    stat((100 * cover).toFixed(0) + " %", "of 80 % search regions held the leak (target 80 %)") +
+    stat(regionAvg.toFixed(1) + " / " + N, "junctions per 80 % region, mean");
+  const bins = BINS.map(([lo, hi]) => { const r = res.filter((x) => x.q >= lo && x.q < hi); return {label: `${lo}–${Math.round(hi)}`, n: r.length, med: median(r.map((x) => x.err)), cov: r.filter((x) => x.inRegion).length / Math.max(1, r.length)}; });
+  barChart($("chartSize"), bins);
+  $("tblSize").innerHTML = `<tr><th>leak L/s</th><th>n</th><th>median error</th><th>80 % coverage</th></tr>` + bins.map((b) => `<tr><td>${b.label}</td><td>${b.n}</td><td>${fmtM(b.med)}</td><td>${(100 * b.cov).toFixed(0)} %</td></tr>`).join("");
+  setTimeout(() => runKCurve(ns), 30);
+}
+function stat(v, l) { return `<div class="stat"><b class="num">${v}</b><span>${l}</span></div>`; }
+function runKCurve(ns) {
+  const ks = [2, 3, 4, 5, 6, 8, 10, 12], rows = [];
+  const saved = seed; seed = 4242;
+  for (const k of ks) {
+    const g = greedyIdx.slice(0, k).sort((a, b) => a - b); let eg = 0; for (let t = 0; t < 120; t++) eg += trial(g, ns, 2, 8).exp;
+    let er = 0; for (let r = 0; r < 5; r++) { const s = randomLayout(k, 100 + r); for (let t = 0; t < 40; t++) er += trial(s, ns, 2, 8).exp; }
+    rows.push({k, greedy: eg / 120, random: er / 200});
+  }
+  seed = saved;
+  lineChart($("chartK"), rows);
+  $("tblK").innerHTML = `<tr><th>sensors</th><th>optimized</th><th>random</th></tr>` + rows.map((r) => `<tr><td>${r.k}</td><td>${fmtM(r.greedy)}</td><td>${fmtM(r.random)}</td></tr>`).join("");
+}
+
+// ---------- charts (hand-built SVG, one scale each) ----------
+const CW = 520, CH = 260, M = {l: 58, r: 16, t: 14, b: 38};
+function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; return 10 * p; }
+function axes(svg, ymax, ticks) {
+  svg.replaceChildren();
+  for (let i = 0; i <= ticks; i++) { const v = ymax * i / ticks, y = M.t + (CH - M.t - M.b) * (1 - i / ticks);
+    el("line", {x1: M.l, x2: CW - M.r, y1: y, y2: y, class: i ? "grid" : "axis"}, svg);
+    const t = el("text", {x: M.l - 8, y: y + 4, "text-anchor": "end"}, svg); t.textContent = v >= 1000 ? (v / 1000) + " km" : v + " m"; }
+}
+const yOf = (v, ymax) => M.t + (CH - M.t - M.b) * (1 - v / ymax);
+function barChart(svg, bins) {
+  const ymax = niceMax(Math.max(meanRand, ...bins.map((b) => b.med || 0)) * 1.05); axes(svg, ymax, 4);
+  const bw = (CW - M.l - M.r) / bins.length;
+  bins.forEach((b, i) => { const x = M.l + i * bw + bw * 0.22, w = bw * 0.56, y = yOf(b.med || 0, ymax), h = CH - M.b - y;
+    const r = el("path", {d: `M${x},${CH - M.b} V${y + 4} Q${x},${y} ${x + 4},${y} H${x + w - 4} Q${x + w},${y} ${x + w},${y + 4} V${CH - M.b} Z`, fill: "var(--water)"}, svg);
+    r.addEventListener("mousemove", (e) => { tip.innerHTML = `${b.label} L/s · n=${b.n}<br>median error ${fmtM(b.med)}<br>80 % region coverage ${(100 * b.cov).toFixed(0)} %`; tip.hidden = false; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 14) + "px"; });
+    r.addEventListener("mouseleave", hideTip);
+    const lt = el("text", {x: x + w / 2, y: y - 6, "text-anchor": "middle", class: "ttl"}, svg); lt.textContent = fmtM(b.med);
+    const xl = el("text", {x: x + w / 2, y: CH - M.b + 16, "text-anchor": "middle"}, svg); xl.textContent = b.label; });
+  const xt = el("text", {x: (CW + M.l) / 2, y: CH - 4, "text-anchor": "middle"}, svg); xt.textContent = "leak size (L/s at 30 m)";
+  const yr = yOf(meanRand, ymax); el("line", {x1: M.l, x2: CW - M.r, y1: yr, y2: yr, stroke: "var(--ink-2)", "stroke-dasharray": "5 4", "stroke-width": 1.5}, svg);
+  const rt = el("text", {x: CW - M.r, y: yr - 6, "text-anchor": "end", class: "ttl"}, svg); rt.textContent = "random guess " + fmtM(meanRand);
+}
+function lineChart(svg, rows) {
+  const ymax = niceMax(Math.max(...rows.map((r) => Math.max(r.greedy, r.random))) * 1.08); axes(svg, ymax, 4);
+  const kmin = rows[0].k, kmax = rows[rows.length - 1].k, xOf = (k) => M.l + 10 + (CW - M.l - M.r - 70) * (k - kmin) / (kmax - kmin);
+  rows.forEach((r) => { const t = el("text", {x: xOf(r.k), y: CH - M.b + 16, "text-anchor": "middle"}, svg); t.textContent = r.k; });
+  const xt = el("text", {x: (CW + M.l) / 2, y: CH - 4, "text-anchor": "middle"}, svg); xt.textContent = "number of pressure sensors";
+  const series = [{key: "greedy", name: "optimized", color: "var(--water)"}, {key: "random", name: "random", color: "var(--ink-3)"}];
+  for (const s of series) {
+    el("path", {d: rows.map((r, i) => (i ? "L" : "M") + xOf(r.k) + "," + yOf(r[s.key], ymax)).join(" "), stroke: s.color, "stroke-width": 2, fill: "none"}, svg);
+    rows.forEach((r) => { const c = el("circle", {cx: xOf(r.k), cy: yOf(r[s.key], ymax), r: 4.5, fill: s.color, stroke: "var(--surface)", "stroke-width": 2}, svg);
+      c.addEventListener("mousemove", (e) => { tip.innerHTML = `${r.k} sensors · ${s.name}<br>expected error ${fmtM(r[s.key])}`; tip.hidden = false; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 14) + "px"; });
+      c.addEventListener("mouseleave", hideTip); });
+    const last = rows[rows.length - 1]; const t = el("text", {x: xOf(last.k) + 9, y: yOf(last[s.key], ymax) + 4, class: "ttl"}, svg); t.textContent = s.name;
+  }
+}
+
+// ---------- boot ----------
+$("sysQ").textContent = Math.round(D.system_demand_lps);
+$("nSims").textContent = (92 * SZ.length + NOISE.length + 120).toLocaleString();
+$("supMed").textContent = D.superposition.median_max_abs_error_m.toFixed(3);
+$("supP95").textContent = D.superposition.p95_max_abs_error_m.toFixed(3);
+$("dRand").textContent = (meanRand / 1000).toFixed(1);
+$("k").max = String(greedyIdx.length);
+update(false);
+runEvidence(false);
+</script>
